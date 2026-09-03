@@ -1,0 +1,10 @@
+<resources>
+    <!-- Compose owns all real UI theming (see theme/Theme.kt); this is only the launch/window
+         theme Android needs before the first Compose frame draws. -->
+    <style name="Theme.AiCli" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background_dark</item>
+        <item name="android:statusBarColor">@color/window_background_dark</item>
+        <item name="android:navigationBarColor">@color/window_background_dark</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
