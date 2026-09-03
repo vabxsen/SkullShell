@@ -1,4 +1,4 @@
-# AI CLI — Native Android AI Coding Workspace
+# Ternix — Native Android AI Coding Workspace
 
 A native Android 12+ (API 31+) app that runs Claude Code, Codex CLI, OpenCode, and
 Antigravity CLI in a real terminal on-device — real PTY, real Linux userland, real
