@@ -15,6 +15,14 @@ private val Context.dataStore by preferencesDataStore(name = "aicli_settings")
 enum class CursorStyle { BLOCK, BAR, UNDERLINE }
 enum class TerminalTheme { DARK_DEFAULT, HIGH_CONTRAST, SOLARIZED_DARK }
 
+/** App chrome light/dark preference — distinct from [TerminalTheme], which is the ANSI palette. */
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
+data class AppearanceSettings(
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val dynamicColorEnabled: Boolean = false,
+)
+
 data class TerminalSettings(
     val fontSize: Float = 13f,
     val lineSpacing: Float = 1.0f,
@@ -41,6 +49,27 @@ class SettingsRepository(private val context: Context) {
         val THEME = stringPreferencesKey("terminal_theme")
         val COPY_ON_SELECT = booleanPreferencesKey("terminal_copy_on_select")
         val DEBUG_LOGGING = booleanPreferencesKey("advanced_debug_logging")
+        val APP_THEME_MODE = stringPreferencesKey("app_theme_mode")
+        val DYNAMIC_COLOR_ENABLED = booleanPreferencesKey("dynamic_color_enabled")
+    }
+
+    val appearanceSettings: Flow<AppearanceSettings> = context.dataStore.data.map { prefs ->
+        AppearanceSettings(
+            themeMode = prefs[Keys.APP_THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM,
+            dynamicColorEnabled = prefs[Keys.DYNAMIC_COLOR_ENABLED] ?: false,
+        )
+    }
+
+    suspend fun updateAppearance(update: (AppearanceSettings) -> AppearanceSettings) {
+        context.dataStore.edit { prefs ->
+            val current = AppearanceSettings(
+                themeMode = prefs[Keys.APP_THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM,
+                dynamicColorEnabled = prefs[Keys.DYNAMIC_COLOR_ENABLED] ?: false,
+            )
+            val next = update(current)
+            prefs[Keys.APP_THEME_MODE] = next.themeMode.name
+            prefs[Keys.DYNAMIC_COLOR_ENABLED] = next.dynamicColorEnabled
+        }
     }
 
     val terminalSettings: Flow<TerminalSettings> = context.dataStore.data.map { prefs ->

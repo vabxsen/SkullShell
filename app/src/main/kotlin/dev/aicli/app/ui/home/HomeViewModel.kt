@@ -3,12 +3,14 @@ package dev.aicli.app.ui.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.aicli.app.data.ProjectRepository
+import dev.aicli.app.data.ProviderStateRepository
 import dev.aicli.app.data.SessionManager
+import dev.aicli.app.ui.common.InstallProgressUi
+import dev.aicli.app.ui.common.ProviderCard
 import dev.aicli.app.ui.common.UiState
 import dev.aicli.core.filesystem.Project
 import dev.aicli.provider.api.AIProvider
 import dev.aicli.provider.api.InstallEvent
-import dev.aicli.provider.api.ProviderState
 import dev.aicli.runtime.health.CheckStatus
 import dev.aicli.runtime.health.RuntimeHealthChecker
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,11 +18,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-
-data class ProviderCard(val provider: AIProvider, val state: ProviderState)
-
-/** Drives the install-progress dialog on Home — a provider's own install/uninstall Flow<InstallEvent>. */
-data class InstallProgressUi(val providerId: String, val displayName: String, val latestEvent: InstallEvent?, val done: Boolean)
 
 data class HomeUiData(
     val providerCards: List<ProviderCard>,
@@ -34,6 +31,7 @@ class HomeViewModel(
     private val healthChecker: RuntimeHealthChecker,
     private val projectRepository: ProjectRepository,
     private val sessionManager: SessionManager,
+    private val providerStateRepository: ProviderStateRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<UiState<HomeUiData>>(UiState.Loading)
@@ -72,7 +70,9 @@ class HomeViewModel(
         viewModelScope.launch {
             _uiState.value = UiState.Loading
             try {
-                val cards = providers.map { provider -> ProviderCard(provider, provider.detectState()) }
+                providerStateRepository.refreshAll()
+                val states = providerStateRepository.states.value
+                val cards = providers.map { provider -> ProviderCard(provider, states.getValue(provider.id)) }
                 val projects = projectRepository.projects.first()
                 val health = healthChecker.runAll()
                 val passCount = health.count { it.status == CheckStatus.PASS }

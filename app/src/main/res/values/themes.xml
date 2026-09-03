@@ -1,6 +1,10 @@
 <resources>
     <!-- Compose owns all real UI theming (see theme/Theme.kt); this is only the launch/window
-         theme Android needs before the first Compose frame draws. -->
+         theme Android needs before the first Compose frame draws. It is intentionally always
+         dark (the app's default theme) — once Compose's first frame renders, AiCliTheme's
+         SideEffect corrects system-bar appearance (light/dark icons) to match the user's actual
+         resolved theme (System/Light/Dark), so a Light-mode user sees a one-frame flash of dark
+         system bars, not a persistent mismatch. -->
     <style name="Theme.AiCli" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_background_dark</item>
         <item name="android:statusBarColor">@color/window_background_dark</item>

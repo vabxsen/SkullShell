@@ -2,6 +2,7 @@ package dev.aicli.app.di
 
 import android.content.Context
 import dev.aicli.app.data.ProjectRepository
+import dev.aicli.app.data.ProviderStateRepository
 import dev.aicli.app.data.SessionManager
 import dev.aicli.core.networking.NetworkMonitor
 import dev.aicli.core.security.SecretStore
@@ -43,4 +44,5 @@ class AppContainer(private val context: Context) {
     }
 
     val providersById: Map<String, AIProvider> by lazy { providers.associateBy { it.id } }
+    val providerStateRepository: ProviderStateRepository by lazy { ProviderStateRepository(providers) }
 }

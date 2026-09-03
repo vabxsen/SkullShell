@@ -92,7 +92,7 @@ fun combineWithModifiers(char: Char, ctrlHeld: Boolean, altHeld: Boolean): ByteA
 private fun KeyButton(label: String, active: Boolean = false, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
-        modifier = Modifier.size(width = 56.dp, height = 40.dp),
+        modifier = Modifier.size(width = 56.dp, height = 48.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp),
         shape = RoundedCornerShape(8.dp),
         colors = if (active) {

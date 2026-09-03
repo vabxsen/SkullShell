@@ -6,8 +6,11 @@ object Destinations {
     const val HOME = "home"
     const val PROJECTS = "projects"
     const val TERMINAL = "terminal/{sessionId}"
+    const val PROVIDERS = "providers"
+    const val AUTHENTICATE = "authenticate/{providerId}"
     const val SETTINGS = "settings"
     const val DIAGNOSTICS = "diagnostics"
 
     fun terminal(sessionId: String) = "terminal/$sessionId"
+    fun authenticate(providerId: String) = "authenticate/$providerId"
 }

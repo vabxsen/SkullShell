@@ -6,6 +6,8 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import dev.aicli.app.ui.diagnostics.DiagnosticsViewModel
 import dev.aicli.app.ui.home.HomeViewModel
 import dev.aicli.app.ui.projects.ProjectsViewModel
+import dev.aicli.app.ui.providers.AuthenticationViewModel
+import dev.aicli.app.ui.providers.ProvidersViewModel
 import dev.aicli.app.ui.settings.SettingsViewModel
 import dev.aicli.app.ui.terminal.TerminalViewModel
 
@@ -14,11 +16,13 @@ class ViewModelFactory(private val container: AppContainer) : ViewModelProvider.
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
         return when (modelClass) {
-            HomeViewModel::class.java -> HomeViewModel(container.providers, container.healthChecker, container.projectRepository, container.sessionManager) as T
+            HomeViewModel::class.java -> HomeViewModel(container.providers, container.healthChecker, container.projectRepository, container.sessionManager, container.providerStateRepository) as T
             ProjectsViewModel::class.java -> ProjectsViewModel(container.projectRepository) as T
             TerminalViewModel::class.java -> TerminalViewModel(container.sessionManager, container.providersById, container.termuxEnvironment, container.projectRepository) as T
             SettingsViewModel::class.java -> SettingsViewModel(container.settingsRepository, container.bootstrapManager, container.providers) as T
-            DiagnosticsViewModel::class.java -> DiagnosticsViewModel(container.healthChecker) as T
+            DiagnosticsViewModel::class.java -> DiagnosticsViewModel(container.healthChecker, container.providers, container.providerStateRepository) as T
+            ProvidersViewModel::class.java -> ProvidersViewModel(container.providers, container.providerStateRepository) as T
+            AuthenticationViewModel::class.java -> AuthenticationViewModel(container.providersById, container.sessionManager, container.termuxEnvironment) as T
             else -> error("Unknown ViewModel class: $modelClass")
         }
     }

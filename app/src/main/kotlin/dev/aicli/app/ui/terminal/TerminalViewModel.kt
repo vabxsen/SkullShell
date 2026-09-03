@@ -19,7 +19,7 @@ import java.io.File
 
 class TerminalViewModel(
     private val sessionManager: SessionManager,
-    private val providersById: Map<String, AIProvider>,
+    val providersById: Map<String, AIProvider>,
     private val termuxEnvironment: TermuxEnvironment,
     private val projectRepository: ProjectRepository,
 ) : ViewModel() {
@@ -45,6 +45,11 @@ class TerminalViewModel(
                     openShell(workingDirectory, projectId = id)
                 }
                 "provider" -> launchProvider(id, defaultWorkspaceDir())
+                // "session" (no id): the nav-rail/bottom-nav Terminal destination. The
+                // sessions.value.isNotEmpty() guard above already makes this a no-op — and
+                // therefore a resume of whatever was last active — whenever a session exists;
+                // this branch only fires to open a first default shell when none does yet.
+                "session" -> openShell(defaultWorkspaceDir())
                 else -> openShell(defaultWorkspaceDir())
             }
         }

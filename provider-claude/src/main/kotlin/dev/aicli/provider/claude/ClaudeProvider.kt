@@ -14,6 +14,7 @@ import dev.aicli.provider.api.ProviderLaunchRequest
 import dev.aicli.provider.api.ProviderState
 import dev.aicli.runtime.bootstrap.TermuxEnvironment
 import dev.aicli.runtime.foreignlibc.ForeignLibcRuntime
+import dev.aicli.runtime.foreignlibc.ForeignLibcState
 import dev.aicli.runtime.foreignlibc.LibcFlavor
 import dev.aicli.terminal.PtyProcess
 import kotlinx.coroutines.Dispatchers
@@ -121,8 +122,20 @@ class ClaudeProvider(private val context: Context) : AIProvider {
 
                 if (!foreignLibc.isInstalled(LibcFlavor.MUSL)) {
                     emit(InstallEvent.Progress("Installing musl compatibility layer (Alpine, one-time)", 0.05f))
+                    var libcFailureReason: String? = null
                     foreignLibc.install(LibcFlavor.MUSL).collect { state ->
-                        emit(InstallEvent.Progress("Compatibility layer: $state", null))
+                        if (state is ForeignLibcState.Failed) {
+                            // Don't let the real failure reason get swallowed into a generic
+                            // "compatibility layer failed" message below — surface it verbatim.
+                            libcFailureReason = state.reason
+                        } else {
+                            emit(InstallEvent.Progress("Compatibility layer: $state", null))
+                        }
+                    }
+                    val libcFailure = libcFailureReason
+                    if (libcFailure != null) {
+                        emit(InstallEvent.Failed("foreign_libc", libcFailure))
+                        return@flow
                     }
                     if (!foreignLibc.isInstalled(LibcFlavor.MUSL)) {
                         emit(InstallEvent.Failed("foreign_libc", "Failed to install the musl compatibility layer"))

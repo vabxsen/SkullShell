@@ -3,6 +3,7 @@ package dev.aicli.terminal
 import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -145,7 +147,7 @@ fun TerminalView(
         else buffer.snapshotRow(absoluteIndex - sbSize)
     }
 
-    Box(modifier = modifier) {
+    Box(modifier = modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
     Canvas(
         modifier = Modifier
             .fillMaxSize()
@@ -216,7 +218,7 @@ fun TerminalView(
             val absoluteLine = topLine + viewRow
             if (absoluteLine < 0 || absoluteLine >= totalLines()) continue
             val row = getLine(absoluteLine)
-            drawRow(row, viewRow, charWidth, charHeight, paint, defaultForeground, absoluteLine, sel)
+            drawRow(row, viewRow, charWidth, charHeight, paint, defaultForeground, backgroundColor, absoluteLine, sel)
         }
 
         if (buffer.cursorVisible && blink) {
@@ -273,9 +275,14 @@ private fun DrawScope.drawRow(
     charHeight: Float,
     paint: Paint,
     defaultForeground: Int,
+    backgroundColor: Int,
     absoluteLine: Int,
     selection: Pair<Pair<Int, Int>, Pair<Int, Int>>?,
 ) {
+    // backgroundColor may carry an alpha byte (e.g. a theme color's toArgb()) — the cell/ANSI
+    // colors below are always packed 0xRRGGBB (see TerminalColor.resolveRgb), so mask it off
+    // before comparing/using it as the "this cell is just the plain background" default.
+    val defaultBgRgb = backgroundColor and 0xFFFFFF
     val baselineY = viewRow * charHeight - paint.fontMetrics.ascent
     for (col in row.indices) {
         val cell = row[col]
@@ -283,9 +290,9 @@ private fun DrawScope.drawRow(
         val selected = selection != null && isCellSelected(absoluteLine, col, selection)
         val inverse = cell.hasFlag(CellFlags.INVERSE) != selected
         val fgRgb = TerminalColor.resolveRgb(cell.fg, defaultForeground)
-        val bgRgb = TerminalColor.resolveRgb(cell.bg, 0x00101014)
+        val bgRgb = TerminalColor.resolveRgb(cell.bg, defaultBgRgb)
         val (drawFg, drawBg) = if (inverse) bgRgb to fgRgb else fgRgb to bgRgb
-        if (drawBg != 0x00101014 || selected) {
+        if (drawBg != defaultBgRgb || selected) {
             drawRect(
                 Color(drawBg or (0xFF shl 24)),
                 topLeft = Offset(col * charWidth, viewRow * charHeight),
@@ -306,15 +313,6 @@ private fun DrawScope.drawRow(
             }
         }
     }
-}
-
-private fun DrawScope.drawCursorIfVisible(topLine: Int, totalLines: Int, charWidth: Float, charHeight: Float) {
-    // Cursor is always on the live screen (bottom `rows` lines); only draw it when that region
-    // is within the current viewport, i.e. when pinned to bottom (caller already checks this).
-    val cursorAbsoluteLine = totalLines - 1
-    val viewRow = cursorAbsoluteLine - topLine
-    // The exact row is resolved by the caller passing cursorRow via the buffer at draw time in
-    // the composable above; kept minimal here to avoid duplicating buffer access.
 }
 
 private fun currentTopLine(pinnedToBottom: Boolean, totalLines: Int, viewportRows: Int, scrollFromBottom: Int): Int {

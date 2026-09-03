@@ -2,13 +2,13 @@ package dev.aicli.app.ui.terminal
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -16,21 +16,26 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Snackbar
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.toArgb
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.aicli.app.data.SessionRunState
+import dev.aicli.app.ui.components.EmptyState
+import dev.aicli.app.ui.theme.Dimens
+import dev.aicli.terminal.ConnectionStatus
 import dev.aicli.terminal.TerminalKeyboardBar
+import dev.aicli.terminal.TerminalToolbar
 import dev.aicli.terminal.TerminalView
+import dev.aicli.terminal.ctrlByte
+import java.io.File
 
 @Composable
 fun TerminalScreen(
@@ -38,30 +43,49 @@ fun TerminalScreen(
     sessionArg: String,
     onBack: () -> Unit,
 ) {
-    val sessions by viewModel.sessions.collectAsState()
-    val activeId by viewModel.activeSessionId.collectAsState()
-    val launchError by viewModel.launchError.collectAsState()
+    val sessions by viewModel.sessions.collectAsStateWithLifecycle()
+    val activeId by viewModel.activeSessionId.collectAsStateWithLifecycle()
+    val launchError by viewModel.launchError.collectAsStateWithLifecycle()
+    var switcherOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(sessionArg) { viewModel.resolveAndOpen(sessionArg) }
 
     Scaffold(
         topBar = {
             Column {
-                TopAppBar(title = { Text("Terminal") })
-                if (sessions.isNotEmpty()) {
-                    ScrollableTabRow(selectedTabIndex = sessions.indexOfFirst { it.id == activeId }.coerceAtLeast(0)) {
-                        sessions.forEach { session ->
-                            Tab(
-                                selected = session.id == activeId,
-                                onClick = { viewModel.selectSession(session.id) },
-                                text = { Text(session.title) },
-                            )
+                val session = sessions.firstOrNull { it.id == activeId }
+                val controller = session?.let { viewModel.controllerFor(it.id) }
+                val runState = controller?.runState?.collectAsStateWithLifecycle()?.value
+                TerminalToolbar(
+                    providerIcon = null,
+                    providerName = session?.providerId?.let { viewModel.providersById[it]?.displayName },
+                    sessionTitle = session?.title ?: "Terminal",
+                    workingDirectorySuffix = session?.workingDirectory?.let { File(it).name },
+                    connectionStatus = when (runState) {
+                        SessionRunState.RUNNING -> ConnectionStatus.RUNNING
+                        SessionRunState.EXITED -> ConnectionStatus.EXITED
+                        SessionRunState.KILLED_BY_OS, SessionRunState.ERROR -> ConnectionStatus.ERROR
+                        null -> ConnectionStatus.IDLE
+                    },
+                    onSessionSwitcher = { switcherOpen = true },
+                    onNewSession = { viewModel.newShellInCurrentContext() },
+                    onClear = { controller?.sendInput(byteArrayOf(ctrlByte('L'))) },
+                    onRestart = {
+                        session?.let {
+                            viewModel.closeSession(it.id)
+                            viewModel.newShellInCurrentContext()
                         }
-                        IconButton(onClick = { viewModel.newShellInCurrentContext() }) {
-                            Icon(Icons.Filled.Add, contentDescription = "New session")
-                        }
-                    }
-                }
+                    },
+                    onStop = if (runState == SessionRunState.RUNNING) {
+                        { session?.let { viewModel.closeSession(it.id) } }
+                    } else null,
+                )
+                SessionTabRow(
+                    sessions = sessions,
+                    activeId = activeId,
+                    controllerFor = viewModel::controllerFor,
+                    onSelect = viewModel::selectSession,
+                )
             }
         },
     ) { padding ->
@@ -69,14 +93,24 @@ fun TerminalScreen(
             Column(Modifier.fillMaxSize().padding(padding)) {
                 val session = sessions.firstOrNull { it.id == activeId }
                 if (session == null) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No active session") }
+                    EmptyState(
+                        icon = Icons.Filled.Terminal,
+                        title = "No active session",
+                        body = "Open a project or provider to start one.",
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 } else {
                     val controller = viewModel.controllerFor(session.id)
                     if (controller == null) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Session unavailable") }
+                        EmptyState(
+                            icon = Icons.Filled.Terminal,
+                            title = "Session unavailable",
+                            body = "This session's process is no longer reachable.",
+                            modifier = Modifier.fillMaxSize(),
+                        )
                     } else {
-                        val runState by controller.runState.collectAsState()
-                        val exitCode by controller.exitCode.collectAsState()
+                        val runState by controller.runState.collectAsStateWithLifecycle()
+                        val exitCode by controller.exitCode.collectAsStateWithLifecycle()
                         if (runState != SessionRunState.RUNNING) {
                             SessionEndedBanner(
                                 runState = runState,
@@ -90,18 +124,14 @@ fun TerminalScreen(
                         TerminalView(
                             buffer = controller.buffer,
                             modifier = Modifier.fillMaxWidth().weight(1f),
+                            backgroundColor = MaterialTheme.colorScheme.background.toArgb(),
                             onInput = { bytes -> controller.sendInput(bytes) },
                             onSizeChanged = { cols, rows -> controller.resize(cols, rows) },
                         )
                         TerminalKeyboardBar(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().imePadding(),
                             onSend = { bytes -> controller.sendInput(bytes) },
                         )
-                        Row {
-                            IconButton(onClick = { viewModel.closeSession(session.id) }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Close session")
-                            }
-                        }
                     }
                 }
             }
@@ -113,6 +143,17 @@ fun TerminalScreen(
                 ) { Text(launchError ?: "") }
             }
         }
+    }
+
+    if (switcherOpen) {
+        SessionSwitcherSheet(
+            sessions = sessions,
+            providersById = viewModel.providersById,
+            controllerFor = viewModel::controllerFor,
+            onSelect = viewModel::selectSession,
+            onNewShell = { viewModel.newShellInCurrentContext() },
+            onDismiss = { switcherOpen = false },
+        )
     }
 }
 
@@ -137,13 +178,13 @@ private fun SessionEndedBanner(runState: SessionRunState, exitCode: Int?, onRest
         SessionRunState.RUNNING -> return
     }
     Card(
-        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(Dimens.space12),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(Dimens.space16)) {
             Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
             Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer)
-            Button(onClick = onRestart, modifier = Modifier.padding(top = 8.dp)) { Text("Start new session") }
+            Button(onClick = onRestart, modifier = Modifier.padding(top = Dimens.space8)) { Text("Start new session") }
         }
     }
 }
