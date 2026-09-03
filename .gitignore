@@ -12,4 +12,6 @@ build/
 *.aab
 *.ap_
 *.dex
+*.jks
+*.keystore
 local.properties
