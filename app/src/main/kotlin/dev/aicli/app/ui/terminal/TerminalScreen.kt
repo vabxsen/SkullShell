@@ -7,16 +7,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,10 +45,19 @@ fun TerminalScreen(
     val activeId by viewModel.activeSessionId.collectAsStateWithLifecycle()
     val launchError by viewModel.launchError.collectAsStateWithLifecycle()
     var switcherOpen by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(sessionArg) { viewModel.resolveAndOpen(sessionArg) }
 
+    LaunchedEffect(launchError) {
+        launchError?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearLaunchError()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 val session = sessions.firstOrNull { it.id == activeId }
@@ -134,13 +141,6 @@ fun TerminalScreen(
                         )
                     }
                 }
-            }
-
-            if (launchError != null) {
-                Snackbar(
-                    modifier = Modifier.fillMaxWidth(),
-                    action = { IconButton(onClick = viewModel::clearLaunchError) { Icon(Icons.Filled.Close, null) } },
-                ) { Text(launchError ?: "") }
             }
         }
     }

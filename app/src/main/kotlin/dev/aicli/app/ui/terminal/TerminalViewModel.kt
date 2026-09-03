@@ -80,6 +80,11 @@ class TerminalViewModel(
     /** Opens a plain shell session (no AI provider) rooted at [workingDirectory]. */
     fun openShell(workingDirectory: String, projectId: String? = null) {
         viewModelScope.launch {
+            if (!termuxEnvironment.isBootstrapInstalled) {
+                AppLog.w(LogCategory.TERMINAL, "Refusing to open shell: bootstrap not installed at ${termuxEnvironment.prefixDir}")
+                _launchError.value = "The Linux environment isn't installed yet — set it up from Settings > Repair runtime first."
+                return@launch
+            }
             try {
                 val shellPath = File(termuxEnvironment.prefixDir, "bin/bash").takeIf { it.exists() }?.absolutePath
                     ?: File(termuxEnvironment.prefixDir, "bin/sh").absolutePath
