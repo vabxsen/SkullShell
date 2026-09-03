@@ -63,6 +63,7 @@ fun TerminalView(
     fontSize: TextUnit = 13.sp,
     backgroundColor: Int = 0x00101014,
     defaultForeground: Int = 0xffe6e6e6.toInt(),
+    focusRequester: FocusRequester = remember { FocusRequester() },
     onInput: (ByteArray) -> Unit = {},
     onSizeChanged: (cols: Int, rows: Int) -> Unit = { _, _ -> },
 ) {
@@ -122,7 +123,6 @@ fun TerminalView(
     // value is drained back to empty after every change; only the *delta* is meaningful, forwarded
     // to [onInput] as raw bytes. This is the one place typed text actually reaches the PTY —
     // arrow/Ctrl/Esc/function keys are handled separately by [TerminalKeyboardBar].
-    val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     var fieldValue by remember { mutableStateOf(TextFieldValue("")) }
 

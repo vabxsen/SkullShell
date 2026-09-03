@@ -3,10 +3,12 @@ package dev.aicli.terminal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -50,29 +52,38 @@ fun TerminalKeyboardBar(
         sendKey(if (applicationCursorMode) ss3(letter) else csi(letter.code.toByte()))
     }
 
-    Row(
+    Column(
         modifier = modifier
             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        KeyButton("ESC") { sendKey(byteArrayOf(ESC)) }
-        KeyButton("TAB") { sendKey(byteArrayOf(0x09)) }
-        KeyButton("CTRL", active = ctrlHeld) { ctrlHeld = !ctrlHeld }
-        KeyButton("ALT", active = altHeld) { altHeld = !altHeld }
-        KeyButton("↑") { arrow('A') }
-        KeyButton("↓") { arrow('B') }
-        KeyButton("→") { arrow('C') }
-        KeyButton("←") { arrow('D') }
-        KeyButton("HOME") { sendKey(csi('H'.code.toByte())) }
-        KeyButton("END") { sendKey(csi('F'.code.toByte())) }
-        KeyButton("PGUP") { sendKey(csi('5'.code.toByte(), '~'.code.toByte())) }
-        KeyButton("PGDN") { sendKey(csi('6'.code.toByte(), '~'.code.toByte())) }
-        KeyButton("^C") { sendKey(byteArrayOf(ctrlByte('C'))) }
-        KeyButton("^D") { sendKey(byteArrayOf(ctrlByte('D'))) }
-        KeyButton("^L") { sendKey(byteArrayOf(ctrlByte('L'))) }
-        KeyButton("^Z") { sendKey(byteArrayOf(ctrlByte('Z'))) }
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            KeyButton("ESC") { sendKey(byteArrayOf(ESC)) }
+            KeyButton("TAB") { sendKey(byteArrayOf(0x09)) }
+            KeyButton("CTRL", active = ctrlHeld) { ctrlHeld = !ctrlHeld }
+            KeyButton("ALT", active = altHeld) { altHeld = !altHeld }
+            KeyButton("↑") { arrow('A') }
+            KeyButton("↓") { arrow('B') }
+            KeyButton("←") { arrow('D') }
+            KeyButton("→") { arrow('C') }
+        }
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            KeyButton("HOME") { sendKey(csi('H'.code.toByte())) }
+            KeyButton("END") { sendKey(csi('F'.code.toByte())) }
+            KeyButton("PGUP") { sendKey(csi('5'.code.toByte(), '~'.code.toByte())) }
+            KeyButton("PGDN") { sendKey(csi('6'.code.toByte(), '~'.code.toByte())) }
+            KeyButton("^C") { sendKey(byteArrayOf(ctrlByte('C'))) }
+            KeyButton("^D") { sendKey(byteArrayOf(ctrlByte('D'))) }
+            KeyButton("^L") { sendKey(byteArrayOf(ctrlByte('L'))) }
+            KeyButton("^Z") { sendKey(byteArrayOf(ctrlByte('Z'))) }
+        }
     }
 }
 
@@ -93,11 +104,18 @@ private fun KeyButton(label: String, active: Boolean = false, onClick: () -> Uni
         onClick = onClick,
         modifier = Modifier.size(width = 56.dp, height = 48.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 0.dp),
-        shape = MaterialTheme.shapes.small,
+        shape = RoundedCornerShape(12.dp),
+        border = null,
         colors = if (active) {
-            ButtonDefaults.outlinedButtonColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            ButtonDefaults.outlinedButtonColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         } else {
-            ButtonDefaults.outlinedButtonColors()
+            ButtonDefaults.outlinedButtonColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            )
         },
     ) {
         Text(
