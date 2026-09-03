@@ -20,7 +20,9 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 data class AppearanceSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val dynamicColorEnabled: Boolean = false,
+    // Defaults on: a wallpaper-derived Material You palette is the actual signature of a modern
+    // stock Android/Google app, more than any static color choice.
+    val dynamicColorEnabled: Boolean = true,
 )
 
 data class TerminalSettings(
@@ -56,7 +58,7 @@ class SettingsRepository(private val context: Context) {
     val appearanceSettings: Flow<AppearanceSettings> = context.dataStore.data.map { prefs ->
         AppearanceSettings(
             themeMode = prefs[Keys.APP_THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM,
-            dynamicColorEnabled = prefs[Keys.DYNAMIC_COLOR_ENABLED] ?: false,
+            dynamicColorEnabled = prefs[Keys.DYNAMIC_COLOR_ENABLED] ?: true,
         )
     }
 
@@ -64,7 +66,7 @@ class SettingsRepository(private val context: Context) {
         context.dataStore.edit { prefs ->
             val current = AppearanceSettings(
                 themeMode = prefs[Keys.APP_THEME_MODE]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM,
-                dynamicColorEnabled = prefs[Keys.DYNAMIC_COLOR_ENABLED] ?: false,
+                dynamicColorEnabled = prefs[Keys.DYNAMIC_COLOR_ENABLED] ?: true,
             )
             val next = update(current)
             prefs[Keys.APP_THEME_MODE] = next.themeMode.name

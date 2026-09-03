@@ -15,9 +15,9 @@ import kotlinx.coroutines.launch
 
 /**
  * Backs the Providers screen. Reuses [ProviderStateRepository] (also used by
- * [dev.aicli.app.ui.home.HomeViewModel]) for state *observation* so both screens agree on what
- * "Ready"/"Error"/etc. actually means, but keeps its own install-trigger logic — two call sites
- * isn't enough to justify a shared "InstallCoordinator" abstraction.
+ * [dev.aicli.app.ui.diagnostics.DiagnosticsViewModel]) for state *observation* so every screen
+ * agrees on what "Ready"/"Error"/etc. actually means, but keeps its own install-trigger logic —
+ * two call sites isn't enough to justify a shared "InstallCoordinator" abstraction.
  */
 class ProvidersViewModel(
     private val providers: List<AIProvider>,

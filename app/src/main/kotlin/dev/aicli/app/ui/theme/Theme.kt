@@ -14,70 +14,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-// A dark-first palette built for an AI coding workspace, not a generic terminal emulator:
-// a violet + cyan duotone (distinguishes "AI" surfaces — provider cards, running sessions —
-// from plain shell chrome, and doesn't overlap any single provider's own brand color) on a
-// near-black (not pure black) canvas so OLED contrast doesn't fight legibility.
-private val DarkColors = darkColorScheme(
-    primary = PrimaryDark,
-    onPrimary = OnPrimaryDark,
-    primaryContainer = PrimaryContainerDark,
-    onPrimaryContainer = OnPrimaryContainerDark,
-    secondary = SecondaryDark,
-    onSecondary = OnSecondaryDark,
-    tertiary = TertiaryDark,
-    onTertiary = OnTertiaryDark,
-    tertiaryContainer = TertiaryContainerDark,
-    onTertiaryContainer = OnTertiaryContainerDark,
-    background = SurfaceDark,
-    onBackground = OnSurfaceDark,
-    surface = SurfaceDark,
-    onSurface = OnSurfaceDark,
-    surfaceVariant = SurfaceDarkContainer,
-    onSurfaceVariant = OnSurfaceDimDark,
-    surfaceContainer = SurfaceDarkContainer,
-    surfaceContainerHigh = SurfaceDarkContainerHigh,
-    surfaceContainerHighest = SurfaceDarkContainerHighest,
-    error = ErrorDark,
-    onError = OnErrorDark,
-    errorContainer = ErrorContainerDark,
-    onErrorContainer = OnErrorContainerDark,
-    outline = OutlineDark,
-    outlineVariant = OutlineVariantDark,
-)
-
-private val LightColors = lightColorScheme(
-    primary = PrimaryLight,
-    onPrimary = OnPrimaryLight,
-    primaryContainer = PrimaryContainerLight,
-    onPrimaryContainer = OnPrimaryContainerLight,
-    secondary = SecondaryLight,
-    onSecondary = OnSecondaryLight,
-    tertiary = TertiaryLight,
-    onTertiary = OnTertiaryLight,
-    tertiaryContainer = TertiaryContainerLight,
-    onTertiaryContainer = OnTertiaryContainerLight,
-    background = BackgroundLight,
-    onBackground = OnSurfaceLight,
-    surface = SurfaceLight,
-    onSurface = OnSurfaceLight,
-    surfaceVariant = SurfaceLightContainer,
-    onSurfaceVariant = OnSurfaceDimLight,
-    surfaceContainer = SurfaceLightContainer,
-    surfaceContainerHigh = SurfaceLightContainerHigh,
-    surfaceContainerHighest = SurfaceLightContainerHighest,
-    error = ErrorLight,
-    onError = OnErrorLight,
-    errorContainer = ErrorContainerLight,
-    onErrorContainer = OnErrorContainerLight,
-    outline = OutlineLight,
-    outlineVariant = OutlineVariantLight,
-)
+// No custom brand palette here on purpose: darkColorScheme()/lightColorScheme() called with no
+// arguments ARE Google's own official Material 3 Baseline scheme — the exact tokens published at
+// m3.material.io and shipped as the Compose Material3 default. This is what "looks like Google
+// made it" actually means for color: not a hand-picked hue, but the reference scheme itself.
+// [dynamicColor] is preferred whenever available (API 31+) — the wallpaper-derived Material You
+// palette is the real signature of a modern stock Android/Google app, more than any static color.
+private val DarkColors = darkColorScheme()
+private val LightColors = lightColorScheme()
 
 @Composable
 fun AiCliTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false,
+    dynamicColor: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current

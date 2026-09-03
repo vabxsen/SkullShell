@@ -3,7 +3,6 @@ package dev.aicli.app.ui.components
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -41,7 +40,7 @@ fun StatusChip(
     }
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(4.dp),
+        shape = MaterialTheme.shapes.small,
         color = container,
         contentColor = onContainer,
     ) {

@@ -1,18 +1,8 @@
 package dev.aicli.app.ui.theme
 
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
-import androidx.compose.ui.unit.dp
 
-/**
- * extraSmall = chips/tags/compact items, small = buttons/controls/terminal keycaps,
- * medium = cards/dialogs/input containers, large = bottom sheets/major surfaces,
- * extraLarge = rare prominent surfaces (FAB).
- */
-val AppShapes = Shapes(
-    extraSmall = RoundedCornerShape(4.dp),
-    small = RoundedCornerShape(8.dp),
-    medium = RoundedCornerShape(12.dp),
-    large = RoundedCornerShape(20.dp),
-    extraLarge = RoundedCornerShape(28.dp),
-)
+/** Material 3's own default shape scale — Google's official corner-radius tokens, not a custom
+ *  hierarchy. `Shapes()` with no arguments gives extraSmall=4dp, small=8dp, medium=12dp,
+ *  large=16dp, extraLarge=28dp, exactly as specified at m3.material.io. */
+val AppShapes = Shapes()

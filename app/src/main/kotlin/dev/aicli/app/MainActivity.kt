@@ -15,6 +15,11 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -40,7 +45,6 @@ import dev.aicli.app.di.ViewModelFactory
 import dev.aicli.app.ui.diagnostics.DiagnosticsScreen
 import dev.aicli.app.ui.diagnostics.DiagnosticsViewModel
 import dev.aicli.app.ui.home.HomeScreen
-import dev.aicli.app.ui.home.HomeViewModel
 import dev.aicli.app.ui.nav.Destinations
 import dev.aicli.app.ui.projects.ProjectsScreen
 import dev.aicli.app.ui.projects.ProjectsViewModel
@@ -90,27 +94,35 @@ class MainActivity : ComponentActivity() {
  *  landscape, foldable unfolded, tablet). Matches the common Material breakpoint for "expanded". */
 private val RAIL_BREAKPOINT = 600.dp
 
-private data class TopLevelDestination(val route: String, val label: String, val icon: ImageVector)
+/** [selectedIcon]/[unselectedIcon] follow the same outlined-unselected/filled-selected pattern
+ *  stock Google apps (Gmail, Photos, Drive) use in their own bottom nav/rail — one of the more
+ *  recognizable "this is a real Google app" navigation signals. */
+private data class TopLevelDestination(
+    val route: String,
+    val label: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector,
+)
 
 // Phone bottom bar: Terminal is deliberately excluded — it's reached by action (opening a
 // project/provider/session), not a permanent tab, so it can claim the screen's full height
 // instead of permanently losing a strip to a 5th tab item. Diagnostics stays reachable from
 // Settings/Home rather than taking a 6th slot.
 private val phoneDestinations = listOf(
-    TopLevelDestination(Destinations.HOME, "Home", Icons.Filled.Home),
-    TopLevelDestination(Destinations.PROJECTS, "Projects", Icons.Filled.Folder),
-    TopLevelDestination(Destinations.PROVIDERS, "Providers", Icons.Filled.Apps),
-    TopLevelDestination(Destinations.SETTINGS, "Settings", Icons.Filled.Settings),
+    TopLevelDestination(Destinations.HOME, "Home", Icons.Filled.Home, Icons.Outlined.Home),
+    TopLevelDestination(Destinations.PROJECTS, "Projects", Icons.Filled.Folder, Icons.Outlined.Folder),
+    TopLevelDestination(Destinations.PROVIDERS, "Providers", Icons.Filled.Apps, Icons.Outlined.Apps),
+    TopLevelDestination(Destinations.SETTINGS, "Settings", Icons.Filled.Settings, Icons.Outlined.Settings),
 )
 
 // Wide-screen rail: a rail coexists with content instead of consuming height the terminal
 // needs, so Terminal earns a permanent slot here that it doesn't get on phone width.
 private val railDestinations = listOf(
-    TopLevelDestination(Destinations.HOME, "Home", Icons.Filled.Home),
-    TopLevelDestination(Destinations.PROJECTS, "Projects", Icons.Filled.Folder),
-    TopLevelDestination(Destinations.TERMINAL, "Terminal", Icons.Filled.Terminal),
-    TopLevelDestination(Destinations.PROVIDERS, "Providers", Icons.Filled.Apps),
-    TopLevelDestination(Destinations.SETTINGS, "Settings", Icons.Filled.Settings),
+    TopLevelDestination(Destinations.HOME, "Home", Icons.Filled.Home, Icons.Outlined.Home),
+    TopLevelDestination(Destinations.PROJECTS, "Projects", Icons.Filled.Folder, Icons.Outlined.Folder),
+    TopLevelDestination(Destinations.TERMINAL, "Terminal", Icons.Filled.Terminal, Icons.Outlined.Terminal),
+    TopLevelDestination(Destinations.PROVIDERS, "Providers", Icons.Filled.Apps, Icons.Outlined.Apps),
+    TopLevelDestination(Destinations.SETTINGS, "Settings", Icons.Filled.Settings, Icons.Outlined.Settings),
 )
 
 private fun navigateTopLevel(navController: NavHostController, destination: TopLevelDestination) {
@@ -135,10 +147,17 @@ private fun AppRoot(factory: ViewModelFactory) {
                     if (currentRoute == null || phoneDestinations.any { it.route == currentRoute }) {
                         NavigationBar {
                             phoneDestinations.forEach { destination ->
+                                val selected = currentRoute == destination.route
                                 NavigationBarItem(
-                                    selected = currentRoute == destination.route,
+                                    selected = selected,
                                     onClick = { navigateTopLevel(navController, destination) },
-                                    icon = { Icon(destination.icon, contentDescription = destination.label) },
+                                    alwaysShowLabel = false,
+                                    icon = {
+                                        Icon(
+                                            if (selected) destination.selectedIcon else destination.unselectedIcon,
+                                            contentDescription = destination.label,
+                                        )
+                                    },
                                     label = { Text(destination.label) },
                                 )
                             }
@@ -152,10 +171,17 @@ private fun AppRoot(factory: ViewModelFactory) {
             Row(Modifier.fillMaxSize()) {
                 NavigationRail {
                     railDestinations.forEach { destination ->
+                        val selected = currentRoute == destination.route
                         NavigationRailItem(
-                            selected = currentRoute == destination.route,
+                            selected = selected,
                             onClick = { navigateTopLevel(navController, destination) },
-                            icon = { Icon(destination.icon, contentDescription = destination.label) },
+                            alwaysShowLabel = false,
+                            icon = {
+                                Icon(
+                                    if (selected) destination.selectedIcon else destination.unselectedIcon,
+                                    contentDescription = destination.label,
+                                )
+                            },
                             label = { Text(destination.label) },
                         )
                     }
@@ -170,19 +196,7 @@ private fun AppRoot(factory: ViewModelFactory) {
 private fun AppNavHost(navController: NavHostController, factory: ViewModelFactory, modifier: Modifier) {
     NavHost(navController = navController, startDestination = Destinations.HOME, modifier = modifier) {
         composable(Destinations.HOME) {
-            val vm: HomeViewModel = viewModel(factory = factory)
-            HomeScreen(
-                viewModel = vm,
-                onOpenProjects = { navController.navigate(Destinations.PROJECTS) },
-                onOpenSettings = { navController.navigate(Destinations.SETTINGS) },
-                onOpenDiagnostics = { navController.navigate(Destinations.DIAGNOSTICS) },
-                onLaunchProvider = { providerId ->
-                    // Launch against the app's default workspace root; a project-scoped launch
-                    // happens from ProjectsScreen instead.
-                    navController.navigate(Destinations.terminal("provider:$providerId"))
-                },
-                onOpenProject = { navController.navigate(Destinations.PROJECTS) },
-            )
+            HomeScreen(onOpenTerminal = { navController.navigate(Destinations.terminal("session")) })
         }
         composable(Destinations.PROJECTS) {
             val vm: ProjectsViewModel = viewModel(factory = factory)

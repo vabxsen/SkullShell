@@ -7,8 +7,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Shared aggregation of every provider's [ProviderState], observed by both Home and Providers so
- * neither duplicates the other's `providers.map { it.detectState() }` logic. Stays pull-based
+ * Shared aggregation of every provider's [ProviderState], observed by Providers and Diagnostics
+ * so neither duplicates the other's `providers.map { it.detectState() }` logic. Stays pull-based
  * ([refreshAll] must be called explicitly) rather than a polling loop — `detectState()` performs
  * real shell/file IO per provider, so continuous polling would be a real perf/battery regression.
  */

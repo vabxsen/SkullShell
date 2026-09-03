@@ -102,7 +102,7 @@ class TerminalSessionService : Service() {
             PendingIntent.FLAG_IMMUTABLE,
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("AI CLI — $sessionCount active session${if (sessionCount == 1) "" else "s"}")
+            .setContentTitle("SkullShell — $sessionCount active session${if (sessionCount == 1) "" else "s"}")
             .setContentText("Tap to return to your terminal")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(openIntent)
@@ -114,7 +114,7 @@ class TerminalSessionService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
             val channel = NotificationChannel(CHANNEL_ID, "Terminal sessions", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Shows while AI CLI terminal sessions are running"
+                description = "Shows while SkullShell terminal sessions are running"
             }
             manager.createNotificationChannel(channel)
         }

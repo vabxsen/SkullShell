@@ -1,4 +1,4 @@
-# Ternix Design System
+# SkullShell Design System
 
 Internal reference for the app's visual language, kept short so it stays read. All source
 lives under `app/src/main/kotlin/dev/aicli/app/ui/theme/` and `.../ui/components/`.

@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.CreationExtras
 import dev.aicli.app.ui.diagnostics.DiagnosticsViewModel
-import dev.aicli.app.ui.home.HomeViewModel
 import dev.aicli.app.ui.projects.ProjectsViewModel
 import dev.aicli.app.ui.providers.AuthenticationViewModel
 import dev.aicli.app.ui.providers.ProvidersViewModel
@@ -16,7 +15,6 @@ class ViewModelFactory(private val container: AppContainer) : ViewModelProvider.
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
         return when (modelClass) {
-            HomeViewModel::class.java -> HomeViewModel(container.providers, container.healthChecker, container.projectRepository, container.sessionManager, container.providerStateRepository) as T
             ProjectsViewModel::class.java -> ProjectsViewModel(container.projectRepository) as T
             TerminalViewModel::class.java -> TerminalViewModel(container.sessionManager, container.providersById, container.termuxEnvironment, container.projectRepository) as T
             SettingsViewModel::class.java -> SettingsViewModel(container.settingsRepository, container.bootstrapManager, container.providers) as T

@@ -23,10 +23,11 @@ import dev.aicli.app.ui.theme.Dimens
 import dev.aicli.provider.api.InstallEvent
 
 /**
- * Unified install/update/repair/uninstall progress presentation — shared by Home's card tap and
- * every Providers-screen action, so there is one install experience, not several. [event]'s
- * shape today is [InstallEvent] directly; Stage 9 folds the runtime bootstrap/foreign-libc/apt
- * progress types into the same visual shape via a UI-layer mapper without changing this
+ * Unified install/update/repair/uninstall progress presentation — shared by every Providers- and
+ * Settings-screen action that triggers one, so there is one install experience, not several.
+ * [event]'s shape today is [InstallEvent] directly; other runtime progress types (e.g.
+ * [dev.aicli.runtime.bootstrap.BootstrapState]) fold into the same visual shape via a UI-layer
+ * mapper (see `ui/install/InstallEventMapper.kt`) without changing this
  * component's public contract.
  */
 @OptIn(ExperimentalMaterial3Api::class)

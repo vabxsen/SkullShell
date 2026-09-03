@@ -41,7 +41,7 @@ class DiagnosticsViewModel(
     }
 
     fun exportText(data: DiagnosticsUiData): String = buildString {
-        appendLine("AI CLI Diagnostics")
+        appendLine("SkullShell Diagnostics")
         appendLine("Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
         appendLine("ABIs: ${android.os.Build.SUPPORTED_ABIS.joinToString()}")
         appendLine()

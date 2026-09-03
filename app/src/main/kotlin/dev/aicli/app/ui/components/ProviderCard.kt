@@ -3,6 +3,7 @@ package dev.aicli.app.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -26,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -124,8 +124,13 @@ fun ProviderCard(
             ) {
                 StatusChip(descriptor.label, descriptor.tone, icon = descriptor.icon)
                 if (descriptor.actionEnabled) {
+                    // A filled tonal pill, not a text link — this is the Play Store "Install"
+                    // button pattern, the single most recognizable Google install-action look.
                     if (variant == ProviderCardVariant.Compact) {
-                        TextButton(onClick = onPrimaryAction) { Text(descriptor.actionLabel) }
+                        FilledTonalButton(
+                            onClick = onPrimaryAction,
+                            contentPadding = PaddingValues(horizontal = Dimens.space16, vertical = Dimens.space8),
+                        ) { Text(descriptor.actionLabel, style = MaterialTheme.typography.labelLarge) }
                     } else {
                         FilledTonalButton(onClick = onPrimaryAction) { Text(descriptor.actionLabel) }
                     }

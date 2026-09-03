@@ -120,7 +120,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
 
             item { HorizontalDivider(Modifier.padding(vertical = Dimens.space12)) }
             item { SectionHeader("About") }
-            item { SettingsItem(title = "Ternix", description = "Version ${BuildConfig.VERSION_NAME}") }
+            item { SettingsItem(title = "SkullShell", description = "Version ${BuildConfig.VERSION_NAME}") }
         }
     }
 
