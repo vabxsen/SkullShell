@@ -4,6 +4,7 @@ import android.content.Context
 import dev.aicli.app.data.ProjectRepository
 import dev.aicli.app.data.ProviderStateRepository
 import dev.aicli.app.data.SessionManager
+import dev.aicli.app.update.AppUpdateManager
 import dev.aicli.core.networking.NetworkMonitor
 import dev.aicli.core.security.SecretStore
 import dev.aicli.core.settings.SettingsRepository
@@ -28,6 +29,7 @@ class AppContainer(private val context: Context) {
     val secretStore = SecretStore(context)
     val termuxEnvironment = TermuxEnvironment(context)
     val bootstrapManager = BootstrapManager(context)
+    val appUpdateManager = AppUpdateManager(context)
     val packageManager = PackageManager(context)
     val healthChecker = RuntimeHealthChecker(context)
     val networkMonitor = NetworkMonitor(context)

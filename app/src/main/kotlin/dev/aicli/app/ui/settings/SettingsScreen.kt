@@ -37,6 +37,8 @@ import dev.aicli.core.settings.ThemeMode
 fun SettingsScreen(viewModel: SettingsViewModel) {
     val data by viewModel.uiData.collectAsStateWithLifecycle()
     val repairProgress by viewModel.repairProgress.collectAsStateWithLifecycle()
+    val updateStatus by viewModel.updateStatus.collectAsStateWithLifecycle()
+    val updateProgress by viewModel.updateProgress.collectAsStateWithLifecycle()
     var showThemeDialog by remember { mutableStateOf(false) }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Settings") }) }) { padding ->
@@ -121,11 +123,22 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
             item { HorizontalDivider(Modifier.padding(vertical = Dimens.space12)) }
             item { SectionHeader("About") }
             item { SettingsItem(title = "SkullShell", description = "Version ${BuildConfig.VERSION_NAME}") }
+            item {
+                SettingsItem(
+                    title = "Check for update",
+                    description = updateStatus,
+                    onClick = viewModel::checkForUpdate,
+                )
+            }
         }
     }
 
     repairProgress?.let { progress ->
         InstallProgressSheet(progress, onDismiss = viewModel::dismissRepairProgress)
+    }
+
+    updateProgress?.let { progress ->
+        InstallProgressSheet(progress, onDismiss = viewModel::dismissUpdateProgress)
     }
 
     if (showThemeDialog) {

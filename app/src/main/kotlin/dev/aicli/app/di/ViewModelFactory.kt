@@ -17,7 +17,7 @@ class ViewModelFactory(private val container: AppContainer) : ViewModelProvider.
         return when (modelClass) {
             ProjectsViewModel::class.java -> ProjectsViewModel(container.projectRepository) as T
             TerminalViewModel::class.java -> TerminalViewModel(container.sessionManager, container.providersById, container.termuxEnvironment, container.projectRepository) as T
-            SettingsViewModel::class.java -> SettingsViewModel(container.settingsRepository, container.bootstrapManager, container.providers) as T
+            SettingsViewModel::class.java -> SettingsViewModel(container.settingsRepository, container.bootstrapManager, container.appUpdateManager, container.providers) as T
             DiagnosticsViewModel::class.java -> DiagnosticsViewModel(container.healthChecker, container.providers, container.providerStateRepository) as T
             ProvidersViewModel::class.java -> ProvidersViewModel(container.providers, container.providerStateRepository) as T
             AuthenticationViewModel::class.java -> AuthenticationViewModel(container.providersById, container.sessionManager, container.termuxEnvironment) as T
