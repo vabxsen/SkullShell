@@ -1,0 +1,17 @@
+[
+  {
+    "Url": "https://github.com/termux/proot/archive/v5.1.107.92.zip",
+    "Sha": "29385d1ddb619a9c4449ab512bfd55032034b22f724ddf98fc95ff300ea32135",
+    "Name": "proot-5.1.107.92.zip"
+  },
+  {
+    "Url": "https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz",
+    "Sha": "dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd",
+    "Name": "talloc-2.4.3.tar.gz"
+  },
+  {
+    "Url": "https://github.com/termux/libandroid-shmem/archive/refs/tags/v0.7.tar.gz",
+    "Sha": "1e5ff8459bc0a8c229dd8a94b27d119987e09ef3414331c2b5ebfff20b98e867",
+    "Name": "libandroid-shmem-0.7.tar.gz"
+  }
+]

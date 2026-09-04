@@ -51,10 +51,19 @@ class PtyProcess private constructor(
         // waitpid() can only be meaningfully awaited once per pid (a second call after the child
         // has been reaped returns ECHILD), so exactly one coroutine owns the blocking wait; every
         // caller of waitForExit() just awaits its result instead of each polling independently.
-        scope.launch { exitDeferred.complete(PtyNative.waitFor(pid)) }
+        scope.launch {
+            try {
+                exitDeferred.complete(PtyNative.waitFor(pid))
+            } catch (e: Throwable) {
+                exitDeferred.completeExceptionally(e)
+            } finally {
+                scope.cancel()
+            }
+        }
     }
 
     val outputFlow: Flow<ByteArray> = callbackFlow {
+        val reachedEof = AtomicBoolean(false)
         val job = launch(Dispatchers.IO) {
             val buffer = ByteArray(8192)
             try {
@@ -64,14 +73,21 @@ class PtyProcess private constructor(
                     } catch (e: IOException) {
                         -1
                     }
-                    if (n <= 0) break // EOF: child exited and closed its end of the pty.
+                    if (n <= 0) {
+                        reachedEof.set(true)
+                        break
+                    }
                     send(buffer.copyOf(n))
                 }
             } finally {
                 close()
             }
         }
-        awaitClose { job.cancel() }
+        awaitClose {
+            job.cancel()
+            // Closing the descriptor unblocks the native read when collection is cancelled.
+            if (!reachedEof.get()) destroy()
+        }
     }
 
     suspend fun write(data: ByteArray) = withContext(Dispatchers.IO) {
@@ -84,11 +100,14 @@ class PtyProcess private constructor(
         }
     }
 
+    @Synchronized
     fun resize(cols: Int, rows: Int) {
+        if (destroyed.get()) return
         PtyNative.resize(masterPfd.fd, cols, rows)
     }
 
     fun sendSignal(signal: PtySignal) {
+        if (destroyed.get() || exitDeferred.isCompleted) return
         PtyNative.killProcessGroup(pid, signal.number)
     }
 
@@ -96,10 +115,11 @@ class PtyProcess private constructor(
     suspend fun waitForExit(): Int = exitDeferred.await()
 
     /** Idempotent, safe from any thread: force-kills the child (if still alive) and tears down I/O. */
+    @Synchronized
     fun destroy() {
         if (!destroyed.compareAndSet(false, true)) return
-        PtyNative.killProcessGroup(pid, PtySignal.KILL.number)
-        scope.cancel()
+        if (!exitDeferred.isCompleted) PtyNative.killProcessGroup(pid, PtySignal.KILL.number)
+        // The waitpid owner must finish reaping the child even if a caller destroys the PTY.
         runCatching { masterPfd.close() }
     }
 

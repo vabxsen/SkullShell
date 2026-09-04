@@ -23,6 +23,7 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <fcntl.h>
 #include <android/log.h>
 
 #define LOG_TAG "AICLI-PTY"
@@ -113,16 +114,20 @@ Java_dev_aicli_terminal_PtyNative_forkExec(JNIEnv *env, jclass clazz,
         // by the JVM yet other than the fork itself, so it's safe to call async-signal-unsafe-ish
         // libc here in practice (no JVM/JNI calls past this point, which IS required).
         if (cwd && chdir(cwd) != 0) {
-            // Leave failure diagnosis to the exec'd program itself; we still attempt exec so the
-            // user sees a real error from the CLI/shell rather than a silent app-side abort.
+            const char message[] = "SkullShell: working directory is unavailable\r\n";
+            write(STDERR_FILENO, message, sizeof(message) - 1);
+            _exit(126);
         }
         execve(argv[0], argv, envp);
         // Only reached if execve failed. 127 is the conventional "command not found/not
         // executable" shell exit code; the parent's waitFor() will surface it as such.
+        const char message[] = "SkullShell: could not execute the requested program\r\n";
+        write(STDERR_FILENO, message, sizeof(message) - 1);
         _exit(127);
     }
 
     // Parent process.
+    fcntl(masterFd, F_SETFD, FD_CLOEXEC);
     freeCStringArray(argv);
     freeCStringArray(envp);
     if (cwd) (*env)->ReleaseStringUTFChars(env, jCwd, cwd);

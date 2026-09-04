@@ -1,6 +1,7 @@
 package dev.aicli.provider.codex
 
 import android.content.Context
+import dev.aicli.core.filesystem.SafeFiles
 import dev.aicli.core.logging.AppLog
 import dev.aicli.core.logging.LogCategory
 import dev.aicli.core.networking.GitHubReleaseResolver
@@ -14,17 +15,17 @@ import dev.aicli.provider.api.ProviderInstaller
 import dev.aicli.provider.api.ProviderLaunchRequest
 import dev.aicli.provider.api.ProviderState
 import dev.aicli.terminal.PtyProcess
-import kotlinx.coroutines.CoroutineScope
+import dev.aicli.terminal.runPtyCommand
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.zip.GZIPInputStream
+import dev.aicli.runtime.archive.installExecutable
+import dev.aicli.core.networking.downloadFile
+import dev.aicli.core.networking.ReleaseVersion
 
 /**
  * OpenAI's Codex CLI. See ARCHITECTURE.md's "Codex CLI" section: it ships a real, statically
@@ -35,8 +36,8 @@ import java.util.zip.GZIPInputStream
  * The one deliberate compatibility override: Codex's own Linux sandbox (Landlock + a bubblewrap
  * fallback needing unprivileged user namespaces) does not work under Android's kernel/SELinux
  * restrictions for regular apps. Every launch therefore passes `--sandbox danger-full-access`
- * unless the caller already specified a `--sandbox` value — our own workspace/filesystem
- * boundary (SafePath/WorkspaceRoot) is the isolation layer instead. This is surfaced to the user
+ * unless the caller already specified a `--sandbox` value — the Android application
+ * sandbox is the isolation layer; individual projects are not isolated from each other. This is surfaced to the user
  * via [checkCompatibility]'s caveats, not hidden.
  */
 class CodexProvider(private val context: Context) : AIProvider {
@@ -64,7 +65,7 @@ class CodexProvider(private val context: Context) : AIProvider {
             caveats = listOf(
                 "Codex's built-in Linux sandbox (Landlock/bubblewrap) cannot run under Android's " +
                     "kernel restrictions, so every launch runs with --sandbox danger-full-access. " +
-                    "This app's own workspace boundary is the isolation layer instead.",
+                    "Commands share this app's Android sandbox and can access its other projects and files.",
             ),
         )
     }
@@ -77,7 +78,7 @@ class CodexProvider(private val context: Context) : AIProvider {
         return when (auth.currentState()) {
             AuthState.SignedIn -> ProviderState.Ready(version)
             AuthState.SignedOut, AuthState.Unknown -> ProviderState.AuthRequired
-            is AuthState.Error -> ProviderState.Ready(version) // auth check itself failing shouldn't block launch; codex will report auth errors on its own
+            is AuthState.Error -> ProviderState.Installed(version)
         }
     }
 
@@ -85,7 +86,7 @@ class CodexProvider(private val context: Context) : AIProvider {
         val hasSandboxFlag = request.extraArgs.any { it == "--sandbox" || it.startsWith("--sandbox=") }
         val args = if (hasSandboxFlag) request.extraArgs else request.extraArgs + listOf("--sandbox", "danger-full-access")
         return PtyProcess.spawn(
-            command = env.wrapForExec(listOf(binary.absolutePath) + args),
+            command = env.wrapForExec(listOf(binary.absolutePath) + args, request.workingDirectory),
             environment = env.buildEnvironment(),
             workingDirectory = request.workingDirectory,
             initialCols = request.initialCols,
@@ -99,28 +100,20 @@ class CodexProvider(private val context: Context) : AIProvider {
         else -> null // no known 32-bit (arm/i686) musl build published
     }
 
-    private suspend fun runVersionCommand(): String? = withContext(Dispatchers.IO) {
-        try {
-            val process = PtyProcess.spawn(
-                command = env.wrapForExec(listOf(binary.absolutePath, "--version")),
-                environment = env.buildEnvironment(),
-                workingDirectory = env.homeDir.absolutePath,
-                initialCols = 80,
-                initialRows = 24,
-            )
-            val output = StringBuilder()
-            val job = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                process.outputFlow.collect { output.append(String(it, Charsets.UTF_8)) }
-            }
-            process.waitForExit()
-            job.cancel()
-            output.toString().trim().lineSequence().firstOrNull()
+    private suspend fun runVersionCommand(): String? {
+        return try {
+            val result = runPtyCommand(env.wrapForExec(listOf(binary.absolutePath, "--version")), env.buildEnvironment(), env.homeDir.absolutePath)
+            if (result.exitCode != 0) {
+                AppLog.w(LogCategory.PROVIDER, "Version check failed (exit ${result.exitCode}): ${result.output.take(500)}")
+                null
+            } else Regex("\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?").find(result.output)?.value
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            AppLog.w(LogCategory.PROVIDER, "codex --version failed: ${e.message}")
+            AppLog.w(LogCategory.PROVIDER, "Version check failed: ${e.message}")
             null
         }
     }
-
     private inner class CodexInstaller : ProviderInstaller {
         override fun install(): Flow<InstallEvent> = flow {
             try {
@@ -149,31 +142,20 @@ class CodexProvider(private val context: Context) : AIProvider {
 
                 emit(InstallEvent.Progress("Downloading $assetName", 0.2f))
                 val tarball = File(context.cacheDir, assetName)
-                downloadTo(asset.browser_download_url, tarball)
+                downloadFile(asset.browser_download_url, tarball, asset.size, asset.digest)
 
                 emit(InstallEvent.Progress("Extracting", 0.7f))
-                val destDir = File(env.prefixDir, "opt/codex")
-                destDir.mkdirs()
-                extractTarGz(tarball, destDir)
-                tarball.delete()
-
-                val extractedBinary = destDir.walkTopDown().firstOrNull { it.name == "codex" && it.isFile }
-                    ?: run {
-                        emit(InstallEvent.Failed("extract", "No 'codex' binary found inside $assetName after extraction"))
-                        return@flow
-                    }
-                extractedBinary.setExecutable(true, false)
                 env.prefixDir.resolve("bin").mkdirs()
-                if (binary.exists() || java.nio.file.Files.isSymbolicLink(binary.toPath())) binary.delete()
-                java.nio.file.Files.createSymbolicLink(binary.toPath(), extractedBinary.toPath())
-
-                emit(InstallEvent.Progress("Verifying installation", 0.95f))
-                if (runVersionCommand() == null) {
-                    emit(InstallEvent.Failed("verify", "codex was installed but --version did not succeed"))
-                    return@flow
+                installExecutable(tarball, binary, setOf("codex", "codex-$triple")) { staged ->
+                    emit(InstallEvent.Progress("Verifying installation", 0.95f))
+                    val output = runPtyCommand(env.wrapForExec(listOf(staged.absolutePath, "--version")),
+                        env.buildEnvironment(), env.homeDir.absolutePath).requireSuccess()
+                    check(Regex("\\d+\\.\\d+\\.\\d+").containsMatchIn(output)) { "Codex did not report a version" }
                 }
                 AppLog.i(LogCategory.INSTALLER, "Codex CLI installed: ${release.tag_name}")
                 emit(InstallEvent.Completed)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.e(LogCategory.INSTALLER, "Codex install failed: ${e.message}")
                 emit(InstallEvent.Failed("unexpected", e.message ?: "Unknown error", e))
@@ -181,8 +163,8 @@ class CodexProvider(private val context: Context) : AIProvider {
         }.flowOn(Dispatchers.IO)
 
         override fun uninstall(): Flow<InstallEvent> = flow {
-            binary.delete()
-            File(env.prefixDir, "opt/codex").deleteRecursively()
+            check(!binary.exists() || binary.delete()) { "Could not remove Codex executable" }
+            check(SafeFiles.deleteTree(File(env.prefixDir, "opt/codex"))) { "Could not remove Codex files" }
             emit(InstallEvent.Completed)
         }.flowOn(Dispatchers.IO)
 
@@ -192,7 +174,7 @@ class CodexProvider(private val context: Context) : AIProvider {
                 ?: GitHubReleaseResolver.latestRelease("openai", "codex").getOrNull()
                 ?: return@withContext null
             val latestVersion = latest.tag_name.removePrefix("rust-v")
-            if (latestVersion.isNotBlank() && !currentVersion.contains(latestVersion)) {
+            if (ReleaseVersion.isNewer(latestVersion, currentVersion)) {
                 ProviderState.UpdateAvailable(currentVersion, latestVersion)
             } else null
         }
@@ -202,10 +184,11 @@ class CodexProvider(private val context: Context) : AIProvider {
         private val credentialsFile = File(env.homeDir, ".codex/auth.json")
 
         override suspend fun currentState(): AuthState = withContext(Dispatchers.IO) {
-            when {
-                credentialsFile.exists() -> AuthState.SignedIn
-                System.getenv("OPENAI_API_KEY") != null -> AuthState.SignedIn
-                else -> AuthState.SignedOut
+            val result = runPtyCommand(env.wrapForExec(listOf(binary.absolutePath, "login", "status")), env.buildEnvironment(), env.homeDir.absolutePath)
+            when (result.exitCode) {
+                0 -> AuthState.SignedIn
+                1 -> AuthState.SignedOut
+                else -> AuthState.Error("Could not check Codex authentication (exit ${result.exitCode})")
             }
         }
 
@@ -214,7 +197,7 @@ class CodexProvider(private val context: Context) : AIProvider {
          * Codex itself prints/opens the URL — we never build our own OAuth or WebView handling.
          */
         override suspend fun startLogin(): PtyProcess = PtyProcess.spawn(
-            command = env.wrapForExec(listOf(binary.absolutePath, "login")),
+            command = env.wrapForExec(listOf(binary.absolutePath, "login", "--device-auth")),
             environment = env.buildEnvironment(),
             workingDirectory = env.homeDir.absolutePath,
             initialCols = 100,
@@ -222,67 +205,9 @@ class CodexProvider(private val context: Context) : AIProvider {
         )
 
         override suspend fun logout() = withContext(Dispatchers.IO) {
-            credentialsFile.delete()
+            runPtyCommand(env.wrapForExec(listOf(binary.absolutePath, "logout")),
+                env.buildEnvironment(), env.homeDir.absolutePath).requireSuccess()
             Unit
         }
     }
-}
-
-private fun downloadTo(url: String, destination: File) {
-    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-        instanceFollowRedirects = true
-        connectTimeout = 15_000
-        readTimeout = 30_000
-    }
-    try {
-        val code = connection.responseCode
-        if (code !in 200..299) error("Download failed with HTTP $code for $url")
-        connection.inputStream.use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
-    } finally {
-        connection.disconnect()
-    }
-}
-
-/** Minimal ustar extractor — Codex's release tarballs are plain `tar.gz` with no exotic entries. */
-private fun extractTarGz(tarGz: File, destDir: File) {
-    GZIPInputStream(tarGz.inputStream().buffered()).use { gzip ->
-        val header = ByteArray(512)
-        while (true) {
-            var total = 0
-            while (total < 512) {
-                val n = gzip.read(header, total, 512 - total)
-                if (n == -1) break
-                total += n
-            }
-            if (total < 512 || header.all { it == 0.toByte() }) break
-
-            val name = cString(header, 0, 100)
-            if (name.isBlank()) break
-            val sizeOctal = cString(header, 124, 12).trim()
-            val size = if (sizeOctal.isBlank()) 0L else sizeOctal.toLong(8)
-            val typeFlag = header[156].toInt().toChar()
-
-            val target = File(destDir, name)
-            if (typeFlag == '5') {
-                target.mkdirs()
-            } else if (size > 0) {
-                target.parentFile?.mkdirs()
-                val content = ByteArray(size.toInt())
-                var read = 0
-                while (read < content.size) {
-                    val n = gzip.read(content, read, content.size - read)
-                    if (n == -1) break
-                    read += n
-                }
-                target.outputStream().use { it.write(content) }
-                val padding = (512 - (size % 512)) % 512
-                if (padding > 0) gzip.skip(padding)
-            }
-        }
-    }
-}
-
-private fun cString(bytes: ByteArray, offset: Int, length: Int): String {
-    val end = (offset until offset + length).firstOrNull { bytes[it] == 0.toByte() } ?: (offset + length)
-    return String(bytes, offset, end - offset, Charsets.US_ASCII)
 }

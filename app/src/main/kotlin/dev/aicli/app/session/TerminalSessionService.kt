@@ -32,13 +32,10 @@ import kotlinx.coroutines.launch
  * See ARCHITECTURE.md §8.
  */
 class TerminalSessionService : Service() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var sessionManager: SessionManager
 
-    /** True once we've observed at least one real session — guards against tearing the service
-     *  down on the very first (necessarily empty) emission right after the app launches, before
-     *  the UI has had a chance to open a terminal at all. */
-    private var everHadASession = false
+    private var started = false
 
     inner class LocalBinder : Binder() {
         fun service(): TerminalSessionService = this@TerminalSessionService
@@ -52,14 +49,11 @@ class TerminalSessionService : Service() {
         // instance here would track its own sessions and never see what the UI actually launches.
         sessionManager = (application as AiCliApplication).container.sessionManager
         createNotificationChannel()
-        scope.launch { sessionManager.reconcileAfterRestart() }
         scope.launch {
-            sessionManager.sessions.collect { sessions ->
-                val running = sessions.size
+            sessionManager.runningCount.collect { running ->
                 if (running > 0) {
-                    everHadASession = true
                     startForegroundCompat(buildNotification(running))
-                } else if (everHadASession) {
+                } else if (started) {
                     @Suppress("DEPRECATION")
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -73,8 +67,14 @@ class TerminalSessionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        started = true
         startForegroundCompat(buildNotification(sessionManagerRunningCount()))
-        return START_STICKY
+        // A short command may finish before Android delivers onStartCommand.
+        if (sessionManagerRunningCount() == 0) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelfResult(startId)
+        }
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -85,11 +85,11 @@ class TerminalSessionService : Service() {
         AppLog.i(LogCategory.PROCESS, "TerminalSessionService destroyed")
     }
 
-    private fun sessionManagerRunningCount(): Int = sessionManager.sessions.value.size
+    private fun sessionManagerRunningCount(): Int = sessionManager.runningCount.value
 
     private fun startForegroundCompat(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }

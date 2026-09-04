@@ -67,9 +67,9 @@ class FileSystemManager(private val root: WorkspaceRoot) {
 
     suspend fun delete(relativePath: String): FileOpResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val target = resolve(relativePath)
+            val target = SafePath.entry(root.rootDirectory, relativePath)
             if (target == root.rootDirectory.canonicalFile) error("refusing to delete the workspace root itself")
-            if (!target.deleteRecursively()) error("delete failed for $relativePath")
+            if (!SafeFiles.deleteTree(target)) error("delete failed for $relativePath")
         }.fold(
             onSuccess = { FileOpResult.Success(Unit) },
             onFailure = { FileOpResult.Failure(it.message ?: "delete failed", it) },
@@ -78,8 +78,10 @@ class FileSystemManager(private val root: WorkspaceRoot) {
 
     suspend fun rename(fromRelativePath: String, toRelativePath: String): FileOpResult<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val from = resolve(fromRelativePath)
-            val to = resolve(toRelativePath)
+            val from = SafePath.entry(root.rootDirectory, fromRelativePath)
+            val to = SafePath.entry(root.rootDirectory, toRelativePath)
+            check(from != root.rootDirectory.canonicalFile && to != root.rootDirectory.canonicalFile) { "Cannot rename the workspace root" }
+            check(!java.nio.file.Files.exists(to.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) { "Destination already exists: $toRelativePath" }
             to.parentFile?.mkdirs()
             if (!from.renameTo(to)) error("rename failed: $fromRelativePath -> $toRelativePath")
         }.fold(

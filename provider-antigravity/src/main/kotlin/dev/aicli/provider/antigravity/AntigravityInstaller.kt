@@ -1,92 +1,100 @@
 package dev.aicli.provider.antigravity
 
 import android.content.Context
-import dev.aicli.core.logging.AppLog
-import dev.aicli.core.logging.LogCategory
-import dev.aicli.provider.api.InstallEvent
-import dev.aicli.provider.api.ProviderInstaller
-import dev.aicli.provider.api.ProviderState
+import dev.aicli.core.filesystem.SafeFiles
+import dev.aicli.provider.api.*
+import dev.aicli.runtime.archive.TarGzExtractor
 import dev.aicli.runtime.bootstrap.TermuxEnvironment
-import dev.aicli.runtime.pkg.PackageInstallEvent
-import dev.aicli.runtime.pkg.PackageManager
-import dev.aicli.terminal.PtyProcess
+import dev.aicli.runtime.foreignlibc.*
+import dev.aicli.terminal.runPtyCommand
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import dev.aicli.core.networking.ReleaseVersion
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.serialization.json.*
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
-/**
- * Runs Google's own installer (`curl -fsSL https://antigravity.google/cli/install.sh | bash`),
- * the same shape as [dev.aicli.provider.claude.ClaudeInstaller]. This step reliably places the
- * `agy` binary — the failure modes documented in [AntigravityCompatibility] happen at *launch*
- * time (missing glibc, seccomp, VA-width), not install time, so a successful install here is not
- * a promise the binary will run; [AntigravityProvider.detectState] is the real signal.
- */
+/** Uses the checksum-verified release manifest from Google's official CLI installer. */
 class AntigravityInstaller(private val context: Context) : ProviderInstaller {
     private val env = TermuxEnvironment(context)
-    private val pkg = PackageManager(context)
-
+    private val libc = ForeignLibcRuntime(context)
     val binaryPath: File get() = File(env.homeDir, ".local/bin/agy")
 
     override fun install(): Flow<InstallEvent> = flow {
-        if (!env.isBootstrapInstalled) {
-            emit(InstallEvent.Failed("bootstrap", "The Linux runtime isn't set up yet — install it from Home first."))
-            return@flow
-        }
-
-        if (!pkg.isInstalled("curl")) {
-            emit(InstallEvent.Progress("prerequisites", 0.1f, "Installing curl…"))
-            var curlFailed = false
-            pkg.install(listOf("curl")).collect { event ->
-                when (event) {
-                    is PackageInstallEvent.Output -> emit(InstallEvent.Progress("prerequisites", null, event.line))
-                    is PackageInstallEvent.Completed -> if (event.exitCode != 0) curlFailed = true
-                }
+        try {
+            val arch = when (env.termuxAbi) { "aarch64" -> "arm64"; "x86_64" -> "amd64"; else -> error("No Antigravity build for this architecture") }
+            libc.install(LibcFlavor.GLIBC).collect { state ->
+                if (state is ForeignLibcState.Failed) error(state.reason)
+                if (state !is ForeignLibcState.Ready) emit(InstallEvent.Progress("Installing compatibility layer", null))
             }
-            if (curlFailed) {
-                emit(InstallEvent.Failed("prerequisites", "Failed to install curl via apt — check network and try again."))
-                return@flow
-            }
-        }
-
-        emit(InstallEvent.Progress("download", 0.3f, "Running Google's Antigravity CLI installer…"))
-        val shell = File(env.prefixDir, "bin/bash").absolutePath
-        val process = PtyProcess.spawn(
-            command = env.wrapForExec(listOf(shell, "-lc", "curl -fsSL https://antigravity.google/cli/install.sh | bash")),
-            environment = env.buildEnvironment(),
-            workingDirectory = env.homeDir.absolutePath,
-            initialCols = 120,
-            initialRows = 40,
-        )
-        val lineBuffer = StringBuilder()
-        process.outputFlow.collect { bytes ->
-            lineBuffer.append(String(bytes, Charsets.UTF_8))
-            var idx = lineBuffer.indexOf("\n")
-            while (idx >= 0) {
-                val line = lineBuffer.substring(0, idx).trimEnd('\r')
-                if (line.isNotBlank()) emit(InstallEvent.Progress("install", 0.7f, line))
-                lineBuffer.delete(0, idx + 1)
-                idx = lineBuffer.indexOf("\n")
-            }
-        }
-        val exitCode = process.waitForExit()
-
-        if (exitCode != 0) {
-            emit(InstallEvent.Failed("install", "install.sh exited with code $exitCode"))
-            return@flow
-        }
-        if (!binaryPath.exists()) {
-            emit(InstallEvent.Failed("verify", "install.sh reported success but no binary was found at ${binaryPath.absolutePath}"))
-            return@flow
-        }
-        binaryPath.setExecutable(true, false)
-        AppLog.i(LogCategory.INSTALLER, "Antigravity CLI installed at ${binaryPath.absolutePath} (launch-time compatibility not yet verified — see AntigravityCompatibility)")
-        emit(InstallEvent.Completed)
-    }
+            emit(InstallEvent.Progress("Resolving Antigravity release", 0.2f))
+            val manifestUrl = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_$arch.json"
+            val connection = connection(manifestUrl)
+            val manifest = try { Json.parseToJsonElement(connection.inputStream.bufferedReader().use { it.readText() }).jsonObject }
+                finally { connection.disconnect() }
+            val url = manifest.getValue("url").jsonPrimitive.content
+            val checksum = manifest.getValue("sha512").jsonPrimitive.content
+            check(URL(url).protocol == "https") { "Release URL must use HTTPS" }
+            val archive = File(context.cacheDir, "antigravity-download.tar.gz")
+            emit(InstallEvent.Progress("Downloading Antigravity", 0.35f))
+            val download = connection(url)
+            val digest = MessageDigest.getInstance("SHA-512")
+            try { download.inputStream.use { input -> archive.outputStream().use { output ->
+                val buffer = ByteArray(65536)
+                while (true) { val n = input.read(buffer); if (n < 0) break; output.write(buffer, 0, n); digest.update(buffer, 0, n) }
+            } } } finally { download.disconnect() }
+            val actual = digest.digest().joinToString("") { "%02x".format(it) }
+            check(actual.equals(checksum, ignoreCase = true)) { "Antigravity download checksum mismatch" }
+            val staging = File(context.cacheDir, "antigravity-extract")
+            check(SafeFiles.deleteTree(staging))
+            staging.mkdirs()
+            try {
+                TarGzExtractor.extract(archive, staging)
+                val binary = staging.resolve("antigravity")
+                check(binary.isFile) { "Release did not contain the Antigravity executable" }
+                binary.setExecutable(true, true)
+                // Cache is bound explicitly: it is outside filesDir in a foreign root filesystem.
+                val result = runPtyCommand(libc.wrapCommand(LibcFlavor.GLIBC, listOf(binary.absolutePath,"--version"), env.homeDir.absolutePath,
+                    mapOf(context.cacheDir.absolutePath to context.cacheDir.absolutePath)), env.buildEnvironment(), env.homeDir.absolutePath)
+                result.requireSuccess()
+                check(Regex("\\d+\\.\\d+\\.\\d+").containsMatchIn(result.output)) { "Antigravity did not report a version" }
+                binaryPath.parentFile?.mkdirs()
+                val pending = File(binaryPath.parentFile, "agy.new")
+                binary.copyTo(pending, overwrite = true)
+                pending.setExecutable(true,true)
+                Files.move(pending.toPath(), binaryPath.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } finally { SafeFiles.deleteTree(staging); archive.delete() }
+            emit(InstallEvent.Completed)
+        } catch (e: CancellationException) { throw e
+        } catch (e: Exception) { emit(InstallEvent.Failed("install", e.message ?: "Antigravity install failed", e)) }
+    }.flowOn(Dispatchers.IO)
 
     override fun uninstall(): Flow<InstallEvent> = flow {
-        val deleted = binaryPath.delete()
-        emit(if (deleted || !binaryPath.exists()) InstallEvent.Completed else InstallEvent.Failed("uninstall", "Could not remove ${binaryPath.absolutePath}"))
+        check(!binaryPath.exists() || binaryPath.delete()) { "Could not remove Antigravity" }
+        emit(InstallEvent.Completed)
+    }.flowOn(Dispatchers.IO)
+    override suspend fun checkForUpdate(): ProviderState.UpdateAvailable? = withContext(Dispatchers.IO) {
+        if (!binaryPath.exists() || !libc.isInstalled(LibcFlavor.GLIBC)) return@withContext null
+        try {
+            val current = runPtyCommand(libc.wrapCommand(LibcFlavor.GLIBC,
+                listOf(binaryPath.absolutePath, "--version"), env.homeDir.absolutePath),
+                env.buildEnvironment(), env.homeDir.absolutePath).requireSuccess()
+            val version = Regex("\\d+\\.\\d+\\.\\d+").find(current)?.value ?: return@withContext null
+            val arch = when (env.termuxAbi) { "aarch64" -> "arm64"; "x86_64" -> "amd64"; else -> return@withContext null }
+            val connection = connection("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_$arch.json")
+            val latest = try { Json.parseToJsonElement(connection.inputStream.bufferedReader().use { it.readText() }).jsonObject.getValue("version").jsonPrimitive.content }
+                finally { connection.disconnect() }
+            if (ReleaseVersion.isNewer(latest, version)) ProviderState.UpdateAvailable(version, latest) else null
+        } catch (e: CancellationException) { throw e
+        } catch (_: Exception) { null }
     }
-
-    override suspend fun checkForUpdate(): ProviderState.UpdateAvailable? = null
+    private fun connection(url: String) = (URL(url).openConnection() as HttpURLConnection).apply { connectTimeout=15_000; readTimeout=60_000 }
 }

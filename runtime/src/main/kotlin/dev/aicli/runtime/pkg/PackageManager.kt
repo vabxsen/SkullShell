@@ -30,7 +30,7 @@ class PackageManager(context: Context) {
     }
 
     /** `apt update` — must be run at least once after a fresh bootstrap install before any `install`. */
-    fun update(): Flow<PackageInstallEvent> = runApt(listOf("update"))
+    fun update(): Flow<PackageInstallEvent> = runApt(listOf("update", "-o", "APT::Update::Error-Mode=any"))
 
     fun install(packages: List<String>): Flow<PackageInstallEvent> =
         runApt(listOf("install", "-y") + packages)
@@ -48,10 +48,13 @@ class PackageManager(context: Context) {
             initialCols = 120,
             initialRows = 40,
         )
+        try {
+        kotlinx.coroutines.withTimeout(15 * 60 * 1000L) {
         val lineBuffer = StringBuilder()
         process.outputFlow.collect { bytes ->
             val text = String(bytes, Charsets.UTF_8)
             lineBuffer.append(text)
+            if (lineBuffer.length > 64 * 1024) lineBuffer.delete(0, lineBuffer.length - 64 * 1024)
             var newlineIndex = lineBuffer.indexOf("\n")
             while (newlineIndex >= 0) {
                 val line = lineBuffer.substring(0, newlineIndex).trimEnd('\r')
@@ -64,5 +67,7 @@ class PackageManager(context: Context) {
         val exitCode = process.waitForExit()
         AppLog.i(LogCategory.INSTALLER, "${command.joinToString(" ")} exited with $exitCode")
         emit(PackageInstallEvent.Completed(exitCode))
+        }
+        } finally { process.destroy() }
     }
 }

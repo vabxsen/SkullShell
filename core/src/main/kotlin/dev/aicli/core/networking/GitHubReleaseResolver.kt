@@ -18,7 +18,7 @@ object GitHubReleaseResolver {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Serializable
-    data class Asset(val name: String, val browser_download_url: String, val size: Long = 0)
+    data class Asset(val name: String, val browser_download_url: String, val size: Long = 0, val digest: String? = null)
 
     @Serializable
     data class Release(val tag_name: String, val name: String? = null, val assets: List<Asset> = emptyList(), val prerelease: Boolean = false)

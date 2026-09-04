@@ -1,7 +1,5 @@
 <resources>
-    <!-- Pure black, matching SkullColors.bg in the dark scheme (ui/design/Tokens.kt), so the
-         pre-Compose window frame is indistinguishable from the app's first drawn frame. -->
-    <color name="window_background_dark">#000000</color>
-    <color name="launcher_background">#000000</color>
-    <color name="launcher_foreground_accent">#FFFFFF</color>
+    <color name="window_background_dark">#141518</color>
+    <color name="launcher_background">#141518</color>
+    <color name="launcher_foreground_accent">#E8EAF0</color>
 </resources>

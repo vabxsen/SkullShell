@@ -16,6 +16,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import dev.aicli.core.settings.SettingsRepository
 import java.util.UUID
 
 data class SessionMeta(
@@ -37,31 +42,39 @@ class TerminalSessionController(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val parser = AnsiParser(buffer)
+    private val inputQueue = Channel<ByteArray>(Channel.UNLIMITED)
 
     private val _runState = MutableStateFlow(SessionRunState.RUNNING)
     val runState: StateFlow<SessionRunState> = _runState.asStateFlow()
 
     private val _exitCode = MutableStateFlow<Int?>(null)
     val exitCode: StateFlow<Int?> = _exitCode.asStateFlow()
+    private val _outputTail = MutableStateFlow("")
+    val outputTail: StateFlow<String> = _outputTail.asStateFlow()
 
     var onTitleChange: ((String) -> Unit)?
         get() = parser.onTitleChange
         set(value) { parser.onTitleChange = value }
 
     init {
+        parser.onResponse = ::sendInput
+        scope.launch { for (bytes in inputQueue) process.write(bytes) }
         scope.launch {
-            process.outputFlow.collect { bytes -> parser.feed(bytes) }
-        }
-        scope.launch {
+            process.outputFlow.collect { bytes ->
+                parser.feed(bytes)
+                _outputTail.value = (_outputTail.value + bytes.toString(Charsets.UTF_8)).takeLast(16_384)
+            }
             val code = process.waitForExit()
             _exitCode.value = code
             _runState.value = SessionRunState.EXITED
+            process.destroy()
+            inputQueue.close()
             AppLog.i(LogCategory.PROCESS, "Session ${meta.id} (${meta.title}) exited with $code")
         }
     }
 
     fun sendInput(bytes: ByteArray) {
-        scope.launch { process.write(bytes) }
+        inputQueue.trySend(bytes)
     }
 
     fun resize(cols: Int, rows: Int) {
@@ -71,6 +84,8 @@ class TerminalSessionController(
 
     fun destroy() {
         process.destroy()
+        inputQueue.close()
+        _runState.value = SessionRunState.EXITED
         scope.cancel()
     }
 }
@@ -86,6 +101,10 @@ class TerminalSessionController(
 class SessionManager(private val context: Context) {
     private val dao = AppDatabase.get(context).sessionDao()
     private val controllers = LinkedHashMap<String, TerminalSessionController>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val mutex = Mutex()
+    private val _runningCount = MutableStateFlow(0)
+    val runningCount: StateFlow<Int> = _runningCount.asStateFlow()
 
     private val _sessions = MutableStateFlow<List<SessionMeta>>(emptyList())
     val sessions: StateFlow<List<SessionMeta>> = _sessions.asStateFlow()
@@ -100,7 +119,7 @@ class SessionManager(private val context: Context) {
         process: PtyProcess,
         initialCols: Int,
         initialRows: Int,
-    ): TerminalSessionController {
+    ): TerminalSessionController = mutex.withLock {
         val id = UUID.randomUUID().toString()
         val actualMeta = SessionMeta(
             id = id,
@@ -110,15 +129,11 @@ class SessionManager(private val context: Context) {
             workingDirectory = workingDirectory,
             createdAtEpochMillis = System.currentTimeMillis(),
         )
-        val buffer = TerminalBuffer(initialCols, initialRows)
+        val scrollback = SettingsRepository(context).terminalSettings.first().scrollbackLines
+        val buffer = TerminalBuffer(initialCols, initialRows, scrollback)
         val controller = TerminalSessionController(actualMeta, process, buffer)
         controllers[id] = controller
-        // Start (or confirm) the foreground service now that there's an actual session to host —
-        // not eagerly at app launch, which would show a misleading "0 active sessions" notification.
-        androidx.core.content.ContextCompat.startForegroundService(
-            context,
-            android.content.Intent(context, dev.aicli.app.session.TerminalSessionService::class.java),
-        )
+        try {
         dao.upsert(
             SessionEntity(
                 id = id, title = title, providerId = providerId, projectId = projectId,
@@ -127,10 +142,25 @@ class SessionManager(private val context: Context) {
             )
         )
         refresh()
-        return controller
+        androidx.core.content.ContextCompat.startForegroundService(
+            context,
+            android.content.Intent(context, dev.aicli.app.session.TerminalSessionService::class.java),
+        )
+        } catch (e: Exception) {
+            controllers.remove(id)
+            controller.destroy()
+            refresh()
+            throw e
+        }
+        scope.launch {
+            controller.runState.first { it != SessionRunState.RUNNING }
+            dao.updateState(id, "exited", controller.exitCode.value)
+            refresh()
+        }
+        controller
     }
 
-    suspend fun closeSession(sessionId: String) {
+    suspend fun closeSession(sessionId: String) = mutex.withLock {
         controllers.remove(sessionId)?.destroy()
         dao.updateState(sessionId, "exited", null)
         refresh()
@@ -138,6 +168,7 @@ class SessionManager(private val context: Context) {
 
     private fun refresh() {
         _sessions.value = controllers.values.map { it.meta }
+        _runningCount.value = controllers.values.count { it.runState.value == SessionRunState.RUNNING }
     }
 
     /**
@@ -146,7 +177,7 @@ class SessionManager(private val context: Context) {
      * — Android killed the process, the PTY is gone, and there is no way to reattach to it. Marked
      * honestly rather than shown as still running. See ARCHITECTURE.md §8.
      */
-    suspend fun reconcileAfterRestart() {
+    suspend fun reconcileAfterRestart() = mutex.withLock {
         val running = dao.getRunning()
         for (row in running) {
             if (!controllers.containsKey(row.id)) {

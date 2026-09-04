@@ -25,6 +25,8 @@ class TerminalBuffer(
     initialRows: Int,
     private val maxScrollback: Int = 5000,
 ) {
+    init { require(initialCols > 0 && initialRows > 0 && maxScrollback >= 0) }
+
     var cols: Int = initialCols
         private set
     var rows: Int = initialRows
@@ -69,14 +71,19 @@ class TerminalBuffer(
         _revision.value = _revision.value + 1
     }
 
-    fun snapshotRow(index: Int): Row = active[index]
+    @Synchronized
+    fun snapshotRow(index: Int): Row = active.getOrNull(index)?.copyOf() ?: blankRow(cols)
 
+    @Synchronized
     fun scrollbackSize(): Int = if (alternateActive) 0 else scrollback.size
-    fun scrollbackLine(fromTop: Int): Row = scrollback.elementAt(fromTop)
+    @Synchronized
+    fun scrollbackLine(fromTop: Int): Row = scrollback.elementAtOrNull(fromTop)?.copyOf() ?: blankRow(cols)
 
     // ---- writing ----
 
-    fun putCodepoint(codepoint: Int) {
+    @Synchronized
+    fun putCodepoint(rawCodepoint: Int) {
+        val codepoint = if (Character.isValidCodePoint(rawCodepoint) && rawCodepoint !in 0xD800..0xDFFF) rawCodepoint else 0xFFFD
         if (pendingWrap) {
             // Standard DECAWM autowrap: the wrap consumes both a line feed AND a carriage
             // return — without resetting the column here, wrapped output would keep writing at
@@ -112,13 +119,16 @@ class TerminalBuffer(
             codepoint in 0x1F300..0x1FAFF
     }
 
+    @Synchronized
     fun carriageReturn() {
         cursorCol = 0
         pendingWrap = false
         touch()
     }
 
+    @Synchronized
     fun lineFeed() {
+        pendingWrap = false
         newlineInternal(wrapped = false)
         touch()
     }
@@ -132,13 +142,16 @@ class TerminalBuffer(
         }
     }
 
+    @Synchronized
     fun backspace() {
         if (cursorCol > 0) cursorCol--
         pendingWrap = false
         touch()
     }
 
+    @Synchronized
     fun tab(tabStop: Int = 8) {
+        pendingWrap = false
         val next = ((cursorCol / tabStop) + 1) * tabStop
         cursorCol = next.coerceAtMost(cols - 1)
         touch()
@@ -146,6 +159,7 @@ class TerminalBuffer(
 
     // ---- cursor movement ----
 
+    @Synchronized
     fun moveCursor(row: Int, col: Int) {
         cursorRow = row.coerceIn(0, rows - 1)
         cursorCol = col.coerceIn(0, cols - 1)
@@ -153,15 +167,19 @@ class TerminalBuffer(
         touch()
     }
 
+    @Synchronized
     fun moveCursorRelative(dRow: Int, dCol: Int) = moveCursor(cursorRow + dRow, cursorCol + dCol)
 
+    @Synchronized
     fun saveCursor() {
         savedCursorRow = cursorRow
         savedCursorCol = cursorCol
         savedPen = pen
     }
 
+    @Synchronized
     fun restoreCursor() {
+        pendingWrap = false
         cursorRow = savedCursorRow.coerceIn(0, rows - 1)
         cursorCol = savedCursorCol.coerceIn(0, cols - 1)
         pen = savedPen
@@ -170,6 +188,7 @@ class TerminalBuffer(
 
     // ---- erasing ----
 
+    @Synchronized
     fun eraseInLine(mode: Int) {
         val row = active[cursorRow]
         when (mode) {
@@ -180,6 +199,7 @@ class TerminalBuffer(
         touch()
     }
 
+    @Synchronized
     fun eraseInDisplay(mode: Int) {
         when (mode) {
             0 -> {
@@ -190,21 +210,24 @@ class TerminalBuffer(
                 eraseInLine(1)
                 for (r in 0 until cursorRow) active[r] = blankRow(cols)
             }
-            2, 3 -> for (r in 0 until rows) active[r] = blankRow(cols)
+            2 -> for (r in 0 until rows) active[r] = blankRow(cols)
+            3 -> scrollback.clear()
         }
         touch()
     }
 
     // ---- scrolling ----
 
+    @Synchronized
     fun setScrollRegion(top: Int, bottom: Int) {
         scrollTop = top.coerceIn(0, rows - 1)
         scrollBottom = bottom.coerceIn(scrollTop, rows - 1)
         moveCursor(0, 0)
     }
 
+    @Synchronized
     fun scrollUpInRegion(n: Int) {
-        repeat(n) {
+        repeat(n.coerceIn(0, scrollBottom - scrollTop + 1)) {
             val removed = active.removeAt(scrollTop)
             if (!alternateActive && scrollTop == 0) {
                 scrollback.addLast(removed)
@@ -215,16 +238,18 @@ class TerminalBuffer(
         touch()
     }
 
+    @Synchronized
     fun scrollDownInRegion(n: Int) {
-        repeat(n) {
+        repeat(n.coerceIn(0, scrollBottom - scrollTop + 1)) {
             active.removeAt(scrollBottom)
             active.add(scrollTop, blankRow(cols))
         }
         touch()
     }
 
+    @Synchronized
     fun insertLines(n: Int) {
-        repeat(n) {
+        repeat(n.coerceIn(0, scrollBottom - scrollTop + 1)) {
             if (cursorRow in scrollTop..scrollBottom) {
                 active.removeAt(scrollBottom)
                 active.add(cursorRow, blankRow(cols))
@@ -233,8 +258,9 @@ class TerminalBuffer(
         touch()
     }
 
+    @Synchronized
     fun deleteLines(n: Int) {
-        repeat(n) {
+        repeat(n.coerceIn(0, scrollBottom - scrollTop + 1)) {
             if (cursorRow in scrollTop..scrollBottom) {
                 active.removeAt(cursorRow)
                 active.add(scrollBottom, blankRow(cols))
@@ -245,41 +271,79 @@ class TerminalBuffer(
 
     // ---- modes ----
 
+    @Synchronized
+    fun insertCharacters(count: Int) {
+        val n = count.coerceIn(0, cols - cursorCol)
+        val row = active[cursorRow]
+        for (c in cols - 1 downTo cursorCol + n) row[c] = row[c - n]
+        for (c in cursorCol until cursorCol + n) row[c] = pen.toCell(' '.code)
+        touch()
+    }
+
+    @Synchronized
+    fun deleteCharacters(count: Int) {
+        val n = count.coerceIn(0, cols - cursorCol)
+        val row = active[cursorRow]
+        for (c in cursorCol until cols - n) row[c] = row[c + n]
+        for (c in cols - n until cols) row[c] = pen.toCell(' '.code)
+        touch()
+    }
+
+    @Synchronized
+    fun eraseCharacters(count: Int) {
+        val n = count.coerceIn(0, cols - cursorCol)
+        for (c in cursorCol until cursorCol + n) active[cursorRow][c] = pen.toCell(' '.code)
+        touch()
+    }
+
+    @Synchronized
     fun setPen(newPen: PenState) {
         pen = newPen
     }
 
+    @Synchronized
     fun setAlternateScreen(enabled: Boolean) {
         if (enabled == alternateActive) return
         if (enabled) {
+            saveCursor()
             alternate = MutableList(rows) { blankRow(cols) }
+            cursorRow = 0
+            cursorCol = 0
+        } else {
+            restoreCursor()
         }
         alternateActive = enabled
-        cursorRow = 0
-        cursorCol = 0
+        pendingWrap = false
         touch()
     }
 
+    @Synchronized
     fun setCursorVisible(visible: Boolean) {
         cursorVisible = visible
         touch()
     }
 
+    @Synchronized
     fun setAutoWrap(enabled: Boolean) {
         autoWrap = enabled
     }
 
+    @Synchronized
     fun setApplicationCursorMode(enabled: Boolean) {
         applicationCursorMode = enabled
     }
 
+    @Synchronized
     fun setBracketedPaste(enabled: Boolean) {
         bracketedPaste = enabled
     }
 
     // ---- resize ----
 
+    @Synchronized
     fun resize(newCols: Int, newRows: Int) {
+        require(newCols > 0 && newRows > 0)
+        pendingWrap = false
         if (newCols == cols && newRows == rows) return
         primary = resizeGrid(primary, newCols, newRows)
         alternate = resizeGrid(alternate, newCols, newRows)

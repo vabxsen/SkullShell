@@ -1,18 +1,10 @@
 package dev.aicli.app.ui.diagnostics
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -20,103 +12,55 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.aicli.app.ui.common.UiState
-import dev.aicli.app.ui.components.ErrorState
-import dev.aicli.app.ui.components.ProviderPanel
-import dev.aicli.app.ui.components.ProviderPanelVariant
-import dev.aicli.app.ui.design.Glyph
-import dev.aicli.app.ui.design.Glyphs
-import dev.aicli.app.ui.design.LoadingBody
-import dev.aicli.app.ui.design.Metrics
-import dev.aicli.app.ui.design.OutlineButton
-import dev.aicli.app.ui.design.PageTitle
-import dev.aicli.app.ui.design.PrimaryButton
-import dev.aicli.app.ui.design.Rule
-import dev.aicli.app.ui.design.Screen
-import dev.aicli.app.ui.design.SectionHeader
-import dev.aicli.app.ui.design.SkullTheme
-import dev.aicli.app.ui.design.Space
-import dev.aicli.app.ui.design.Text
-import dev.aicli.app.ui.design.TopBar
+import dev.aicli.app.ui.components.*
+import dev.aicli.app.ui.design.*
 import dev.aicli.runtime.health.CheckStatus
 import dev.aicli.runtime.health.HealthCheckResult
-
-/** UI-layer grouping only - [dev.aicli.runtime.health.RuntimeHealthChecker] itself stays
- *  provider-agnostic; this mapping does not change what is actually checked. */
-private val runtimeHealthIds = setOf("bootstrap", "termux_exec")
-private val systemIds = setOf("abi", "cmd_node", "cmd_npm", "cmd_git", "pty", "fs", "network")
-
-private val MAX_MEASURE = 720.dp
 
 @Composable
 fun DiagnosticsScreen(viewModel: DiagnosticsViewModel, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
-
-    Screen(topBar = { TopBar(crumb = "SkullShell / Diagnostics", onBack = onBack) }) {
-        Box(Modifier.widthIn(max = MAX_MEASURE).fillMaxSize().align(Alignment.TopCenter)) {
+    var copied by remember { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    Screen(topBar = { TopBar("Diagnostics", onBack = onBack) }) {
+        Box(Modifier.widthIn(max = 760.dp).fillMaxSize().align(Alignment.TopCenter)) {
             when (val s = state) {
-                is UiState.Loading -> LoadingBody(Modifier.fillMaxSize(), label = "Running diagnostics")
-                is UiState.Error -> ErrorState(
-                    title = "Diagnostics failed",
-                    body = s.message,
-                    onRetry = viewModel::runDiagnostics,
-                )
-                is UiState.Offline -> ErrorState(
-                    title = "Offline",
-                    body = "The network check will fail until you are back online. Everything else still ran.",
-                    glyph = Glyphs.NoSignal,
-                    onRetry = viewModel::runDiagnostics,
-                )
-                is UiState.Success -> {
-                    val runtimeHealth = s.data.healthChecks.filter { it.id in runtimeHealthIds }
-                    val system = s.data.healthChecks.filter { it.id in systemIds }
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(bottom = Space.x12),
-                    ) {
-                        item {
-                            Column(Modifier.padding(horizontal = Metrics.gutter)) {
-                                PageTitle(
-                                    title = "Diagnostics",
-                                    subtitle = "What the runtime reports about this device.",
-                                    modifier = Modifier.padding(vertical = Space.x6),
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(bottom = Space.x4),
-                                    horizontalArrangement = Arrangement.spacedBy(Space.x2),
-                                ) {
-                                    PrimaryButton("Run all", viewModel::runDiagnostics, glyph = Glyphs.Refresh)
-                                    OutlineButton(
-                                        label = "Copy",
-                                        onClick = { clipboard.setText(AnnotatedString(viewModel.exportText(s.data))) },
-                                        glyph = Glyphs.Copy,
-                                    )
+                is UiState.Loading -> LoadingBody(Modifier.fillMaxSize(), "Checking environment")
+                is UiState.Error -> ErrorState("Could not complete checks", s.message, onRetry = viewModel::runDiagnostics)
+                is UiState.Offline -> ErrorState("Offline", "Reconnect to complete the network checks.", onRetry = viewModel::runDiagnostics)
+                is UiState.Success -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(Metrics.gutter),
+                    verticalArrangement = Arrangement.spacedBy(Space.x3)) {
+                    item {
+                        val passed = s.data.healthChecks.count { it.status == CheckStatus.PASS }
+                        val failed = s.data.healthChecks.count { it.status == CheckStatus.FAIL }
+                        Panel(fill = scheme.secondaryContainer) {
+                            Column(Modifier.padding(Space.x6)) {
+                                Glyph(Glyphs.Info, null, tint = scheme.onSecondaryContainer)
+                                Text("Environment checks", style = SkullTheme.type.title, color = scheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(top = Space.x3))
+                                Text("$passed passed · $failed failed · ${s.data.healthChecks.size} total", style = SkullTheme.type.bodySm,
+                                    color = scheme.onSecondaryContainer, modifier = Modifier.padding(top = Space.x2, bottom = Space.x4))
+                                Row(horizontalArrangement = Arrangement.spacedBy(Space.x2)) {
+                                    PrimaryButton("Run again", { copied = false; viewModel.runDiagnostics() }, glyph = Glyphs.Refresh)
+                                    GhostButton(if (copied) "Copied" else "Copy report", {
+                                        clipboard.setText(AnnotatedString(viewModel.exportText(s.data))); copied = true
+                                    })
                                 }
                             }
                         }
-
-                        if (runtimeHealth.isNotEmpty()) {
-                            item { DiagnosticsSection("Runtime health") }
-                            items(runtimeHealth, key = { it.id }) { CheckRow(it); Rule() }
-                        }
-                        if (s.data.providerStates.isNotEmpty()) {
-                            item { DiagnosticsSection("Providers") }
-                            items(s.data.providerStates, key = { it.provider.id }) { card ->
-                                ProviderPanel(
-                                    card = card,
-                                    variant = ProviderPanelVariant.Compact,
-                                    onPrimaryAction = {},
-                                    modifier = Modifier.padding(
-                                        horizontal = Metrics.gutter,
-                                        vertical = Space.x2,
-                                    ),
-                                )
+                    }
+                    item {
+                        Panel {
+                            s.data.healthChecks.forEachIndexed { index, result ->
+                                CheckRow(result)
+                                if (index < s.data.healthChecks.lastIndex) Rule(Modifier.padding(horizontal = Space.x4))
                             }
                         }
-                        if (system.isNotEmpty()) {
-                            item { DiagnosticsSection("System") }
-                            items(system, key = { it.id }) { CheckRow(it); Rule() }
-                        }
+                    }
+                    if (s.data.providerStates.isNotEmpty()) {
+                        item { SectionHeader("Agent status", Modifier.padding(horizontal = Space.x2)) }
+                        items(s.data.providerStates, key = { it.provider.id }) { ProviderPanel(it, ProviderPanelVariant.Compact, onPrimaryAction = {}) }
                     }
                 }
             }
@@ -125,52 +69,13 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel, onBack: () -> Unit) {
 }
 
 @Composable
-private fun DiagnosticsSection(title: String) {
-    SectionHeader(
-        title,
-        Modifier.padding(
-            start = Metrics.gutter,
-            end = Metrics.gutter,
-            top = Space.x6,
-            bottom = Space.x3,
-        ),
-    )
-    Rule()
-}
-
-/**
- * A check reads as a table line: status glyph, label, then the raw detail in mono. The detail is
- * machine output, so it is set in the machine face - that distinction is what lets you skim the
- * left column for failures and only drop into the right column when one turns up.
- */
-@Composable
 private fun CheckRow(result: HealthCheckResult) {
-    val colors = SkullTheme.colors
-    val glyph = when (result.status) {
-        CheckStatus.PASS -> Glyphs.CheckCircle
-        CheckStatus.FAIL -> Glyphs.ErrorCircle
-        CheckStatus.NOT_CHECKED -> Glyphs.Clock
-    }
-    val tint = when (result.status) {
-        CheckStatus.PASS -> colors.ink
-        CheckStatus.FAIL -> colors.ink
-        CheckStatus.NOT_CHECKED -> colors.inkFaint
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Metrics.gutter, vertical = Space.x4),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Glyph(glyph, result.status.name, size = Metrics.glyphMd, tint = tint)
-        Column(Modifier.weight(1f).padding(start = Space.x4)) {
-            Text(result.label, style = SkullTheme.type.body, color = colors.ink)
-            Text(
-                result.detail,
-                style = SkullTheme.type.monoSm,
-                color = colors.inkMuted,
-                modifier = Modifier.padding(top = Space.x1),
-            )
+    val tone = when (result.status) { CheckStatus.PASS -> StatusTone.SUCCESS; CheckStatus.FAIL -> StatusTone.ERROR; CheckStatus.NOT_CHECKED -> StatusTone.NEUTRAL }
+    Column(Modifier.fillMaxWidth().padding(Space.x4)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(result.label, style = SkullTheme.type.heading, modifier = Modifier.weight(1f).padding(end = Space.x2))
+            StatusChip(when (result.status) { CheckStatus.PASS -> "Passed"; CheckStatus.FAIL -> "Failed"; CheckStatus.NOT_CHECKED -> "Not checked" }, tone)
         }
+        Text(result.detail, style = SkullTheme.type.monoSm, color = SkullTheme.colors.inkMuted, modifier = Modifier.padding(top = Space.x2))
     }
 }

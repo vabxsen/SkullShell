@@ -30,9 +30,13 @@ class AnsiParser(private val buffer: TerminalBuffer) {
 
     var onTitleChange: ((String) -> Unit)? = null
     var onBell: (() -> Unit)? = null
+    var onResponse: ((ByteArray) -> Unit)? = null
 
     fun feed(bytes: ByteArray, len: Int = bytes.size) {
-        for (i in 0 until len) feedByte(bytes[i].toInt() and 0xFF)
+        require(len in 0..bytes.size)
+        synchronized(buffer) {
+            for (i in 0 until len) feedByte(bytes[i].toInt() and 0xFF)
+        }
     }
 
     private fun feedByte(b: Int) {
@@ -110,6 +114,10 @@ class AnsiParser(private val buffer: TerminalBuffer) {
     }
 
     private fun handleCsi(b: Int) {
+        if (paramBuilder.length + intermediates.length >= 256) {
+            state = State.GROUND
+            return
+        }
         when {
             b == '?'.code && paramBuilder.isEmpty() && intermediates.isEmpty() -> csiPrivate = true
             b in 0x30..0x3F -> paramBuilder.append(b.toChar())
@@ -138,6 +146,18 @@ class AnsiParser(private val buffer: TerminalBuffer) {
             'B' -> buffer.moveCursorRelative(p1(), 0)
             'C' -> buffer.moveCursorRelative(0, p1())
             'D' -> buffer.moveCursorRelative(0, -p1())
+            'E' -> buffer.moveCursor(buffer.cursorRow + p1(), 0)
+            'F' -> buffer.moveCursor(buffer.cursorRow - p1(), 0)
+            'G', '`' -> buffer.moveCursor(buffer.cursorRow, p1() - 1)
+            'd' -> buffer.moveCursor(p1() - 1, buffer.cursorCol)
+            '@' -> buffer.insertCharacters(p1())
+            'P' -> buffer.deleteCharacters(p1())
+            'X' -> buffer.eraseCharacters(p1())
+            'n' -> when (p.getOrNull(0)) {
+                5 -> onResponse?.invoke("\u001b[0n".toByteArray())
+                6 -> onResponse?.invoke("\u001b[${buffer.cursorRow + 1};${buffer.cursorCol + 1}R".toByteArray())
+            }
+            'c' -> onResponse?.invoke("\u001b[?1;2c".toByteArray())
             'H', 'f' -> {
                 val row = (p.getOrNull(0) ?: 1).coerceAtLeast(1) - 1
                 val col = (p.getOrNull(1) ?: 1).coerceAtLeast(1) - 1
@@ -244,7 +264,7 @@ class AnsiParser(private val buffer: TerminalBuffer) {
                 oscBuilder.append(0x1B.toChar()).append(b.toChar())
             }
             b == 0x1B -> oscEscPending = true
-            else -> oscBuilder.append(b.toChar())
+            else -> if (oscBuilder.length < 4096) oscBuilder.append(b.toChar())
         }
     }
 

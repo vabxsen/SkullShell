@@ -10,6 +10,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.ui.platform.testTag
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -20,6 +27,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -38,7 +50,6 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -60,6 +71,8 @@ fun TerminalView(
     buffer: TerminalBuffer,
     modifier: Modifier = Modifier,
     fontSize: TextUnit = 13.sp,
+    cursorBlink: Boolean = true,
+    copyOnSelect: Boolean = true,
     contentPadding: Dp = 0.dp,
     backgroundColor: Int = 0x00101014,
     defaultForeground: Int = 0xffe6e6e6.toInt(),
@@ -69,9 +82,13 @@ fun TerminalView(
 ) {
     val density = LocalDensity.current
     val clipboard = LocalClipboardManager.current
+    val textToolbar = LocalTextToolbar.current
+    var canvasBounds by remember { mutableStateOf(Rect.Zero) }
+    var selectionAnchor by remember { mutableStateOf(Rect.Zero) }
+    DisposableEffect(textToolbar) { onDispose { textToolbar.hide() } }
     val padPx = with(density) { contentPadding.toPx() }
 
-    val paint = remember(fontSize) {
+    val paint = remember(fontSize, density.density, density.fontScale) {
         Paint().apply {
             typeface = Typeface.MONOSPACE
             textSize = with(density) { fontSize.toPx() }
@@ -99,8 +116,9 @@ fun TerminalView(
     }
 
     var blink by remember { mutableStateOf(true) }
-    LaunchedEffect(Unit) {
-        while (isActive) {
+    LaunchedEffect(cursorBlink) {
+        blink = true
+        while (isActive && cursorBlink) {
             delay(530)
             blink = !blink
         }
@@ -112,6 +130,7 @@ fun TerminalView(
     var pinnedToBottom by remember { mutableStateOf(true) }
     var scrollFromBottom by remember { mutableStateOf(0) }
     var lastScrollbackSize by remember { mutableStateOf(0) }
+    var dragRemainder by remember { mutableStateOf(0f) }
 
     var selectionStart by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var selectionEnd by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -120,12 +139,15 @@ fun TerminalView(
     // connection has to attach to *some* Android text-input-capable element to receive typed text
     // (soft keyboard commits, autocorrect, physical-keyboard composition) — the Canvas below only
     // ever draws pixels, it has no Android input connection of its own. The field's own visible
-    // text is irrelevant (this Canvas renders the terminal grid, not the field's buffer), so its
-    // value is drained back to empty after every change; only the *delta* is meaningful, forwarded
+    // text is irrelevant (this Canvas renders the terminal grid, not the field's buffer). Keep
+    // a bounded input history and forward only the delta. Resetting a value-based field after
+    // every commit can leave its input connection stale and resend previously committed text.
+    // Transforming the state synchronously keeps Compose and the IME in agreement, forwarding
     // to [onInput] as raw bytes. This is the one place typed text actually reaches the PTY —
     // arrow/Ctrl/Esc/function keys are handled separately by [TerminalKeyboardBar].
     val keyboardController = LocalSoftwareKeyboardController.current
-    var fieldValue by remember { mutableStateOf(TextFieldValue("")) }
+    val sentinel = "\u200B"
+    val fieldState = remember(buffer) { TextFieldState(sentinel, TextRange(1)) }
 
     fun sendText(text: String) {
         if (text.isEmpty()) return
@@ -152,13 +174,17 @@ fun TerminalView(
     Canvas(
         modifier = Modifier
             .fillMaxSize()
+            .onGloballyPositioned { canvasBounds = it.boundsInRoot() }
             .pointerInput(Unit) {
                 detectTapGestures(onTap = {
+                    textToolbar.hide()
+                    selectionStart = null
+                    selectionEnd = null
                     focusRequester.requestFocus()
                     keyboardController?.show()
                 })
             }
-            .pointerInput(charWidth, charHeight) {
+            .pointerInput(charWidth, charHeight, copyOnSelect) {
                 detectVerticalDragGestures(
                     onDragEnd = {
                         if (scrollFromBottom <= 0) {
@@ -169,16 +195,21 @@ fun TerminalView(
                 ) { change, dragAmount ->
                     if (selectionStart == null) {
                         change.consume()
-                        val lineDelta = (dragAmount / charHeight).roundToInt()
+                        dragRemainder += dragAmount / charHeight
+                        val lineDelta = dragRemainder.toInt()
+                        dragRemainder -= lineDelta
                         val maxOffset = buffer.scrollbackSize()
                         scrollFromBottom = (scrollFromBottom + lineDelta).coerceIn(0, max(0, maxOffset))
                         pinnedToBottom = scrollFromBottom == 0
                     }
                 }
             }
-            .pointerInput(charWidth, charHeight) {
+            .pointerInput(charWidth, charHeight, copyOnSelect) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { offset ->
+                        textToolbar.hide()
+                        val point = canvasBounds.topLeft + offset
+                        selectionAnchor = Rect(point.x, point.y, point.x + 1, point.y + charHeight)
                         val topLine = currentTopLine(pinnedToBottom, totalLines(), lastRows, scrollFromBottom)
                         val cell = cellFromOffset(offset, padPx, charWidth, charHeight, topLine, lastCols)
                         selectionStart = cell
@@ -194,10 +225,30 @@ fun TerminalView(
                         val end = selectionEnd
                         if (start != null && end != null) {
                             val text = extractSelectedText(::getLine, start, end, lastCols)
-                            if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
+                            if (copyOnSelect && text.isNotEmpty()) {
+                                clipboard.setText(AnnotatedString(text))
+                            } else {
+                                textToolbar.showMenu(selectionAnchor,
+                                    onCopyRequested = {
+                                        clipboard.setText(AnnotatedString(text))
+                                        textToolbar.hide()
+                                        selectionStart = null
+                                        selectionEnd = null
+                                    },
+                                    onPasteRequested = {
+                                        val pasted = clipboard.getText()?.text.orEmpty()
+                                        val content = if (buffer.bracketedPaste) "\u001B[200~$pasted\u001B[201~" else pasted
+                                        onInput(content.toByteArray(Charsets.UTF_8))
+                                        textToolbar.hide()
+                                        selectionStart = null
+                                        selectionEnd = null
+                                    }, onCutRequested = null, onSelectAllRequested = null)
+                            }
                         }
-                        selectionStart = null
-                        selectionEnd = null
+                        if (copyOnSelect) {
+                            selectionStart = null
+                            selectionEnd = null
+                        }
                     },
                 )
             },
@@ -241,31 +292,46 @@ fun TerminalView(
     }
 
     BasicTextField(
-        value = fieldValue,
-        onValueChange = { newValue ->
-            val oldText = fieldValue.text
-            val newText = newValue.text
-            when {
-                newText.length > oldText.length && newText.startsWith(oldText) ->
-                    sendText(newText.substring(oldText.length))
-                newText.length < oldText.length && oldText.startsWith(newText) ->
-                    repeat(oldText.length - newText.length) { onInput(byteArrayOf(0x7F)) } // backspace
-                newText != oldText -> sendText(newText) // IME replaced the whole composition at once
+        state = fieldState,
+        inputTransformation = InputTransformation {
+            val oldText = originalText.toString().removePrefix(sentinel)
+            val newText = asCharSequence().toString().removePrefix(sentinel)
+            val shared = oldText.commonPrefixWith(newText).length
+            if (length == 0 && oldText.isEmpty()) onInput(byteArrayOf(0x7F))
+            else {
+                repeat(oldText.substring(shared).codePointCount(0, oldText.length - shared)) { onInput(byteArrayOf(0x7F)) }
+                sendText(newText.substring(shared))
             }
-            // Drained back to empty immediately: this field's own text is never what's on screen
-            // (the Canvas above renders the real terminal grid) — only the delta matters.
-            fieldValue = TextFieldValue("")
+            // Retain a character for soft-keyboard deleteSurroundingText even at the boundary.
+            // Normal edits retain composition; only trim unusually long input history.
+            if (length == 0 || length > 4096) {
+                replace(0, length, sentinel + newText.takeLast(2048))
+                selection = TextRange(length)
+            }
         },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false, imeAction = ImeAction.None),
         modifier = Modifier
+            .testTag("terminal-input")
             .size(1.dp)
             .alpha(0f)
             .focusRequester(focusRequester)
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val code = event.nativeKeyEvent.keyCode
+                if (event.isCtrlPressed && code in android.view.KeyEvent.KEYCODE_A..android.view.KeyEvent.KEYCODE_Z) {
+                    onInput(byteArrayOf((code - android.view.KeyEvent.KEYCODE_A + 1).toByte()))
+                    return@onPreviewKeyEvent true
+                }
                 when (event.key) {
                     Key.Enter, Key.NumPadEnter -> { onInput(byteArrayOf(0x0D)); true }
                     Key.Backspace -> { onInput(byteArrayOf(0x7F)); true }
                     Key.Delete -> { onInput(byteArrayOf(0x1B, '['.code.toByte(), '3'.code.toByte(), '~'.code.toByte())); true }
+                    Key.Tab -> { onInput(byteArrayOf(9)); true }
+                    Key.Escape -> { onInput(byteArrayOf(27)); true }
+                    Key.DirectionUp -> { onInput(arrowKey('A', buffer.applicationCursorMode)); true }
+                    Key.DirectionDown -> { onInput(arrowKey('B', buffer.applicationCursorMode)); true }
+                    Key.DirectionRight -> { onInput(arrowKey('C', buffer.applicationCursorMode)); true }
+                    Key.DirectionLeft -> { onInput(arrowKey('D', buffer.applicationCursorMode)); true }
                     else -> false
                 }
             },

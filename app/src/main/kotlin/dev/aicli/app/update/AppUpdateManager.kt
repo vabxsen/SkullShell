@@ -7,10 +7,11 @@ import dev.aicli.app.BuildConfig
 import dev.aicli.core.logging.AppLog
 import dev.aicli.core.logging.LogCategory
 import dev.aicli.core.networking.GitHubReleaseResolver
+import dev.aicli.core.networking.downloadFile
+import dev.aicli.core.networking.ReleaseVersion
+import kotlinx.coroutines.CancellationException
+import android.content.pm.PackageManager
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -19,7 +20,7 @@ import kotlinx.coroutines.flow.flowOn
 /** Result of asking GitHub whether a newer release than the running build exists. */
 sealed class UpdateCheckResult {
     data class UpToDate(val currentVersion: String) : UpdateCheckResult()
-    data class Available(val currentVersion: String, val latestVersion: String, val downloadUrl: String, val assetSize: Long) : UpdateCheckResult()
+    data class Available(val currentVersion: String, val latestVersion: String, val downloadUrl: String, val assetSize: Long, val digest: String? = null) : UpdateCheckResult()
     data class Failed(val reason: String, val throwable: Throwable? = null) : UpdateCheckResult()
 }
 
@@ -47,54 +48,50 @@ class AppUpdateManager(private val context: Context) {
             AppLog.w(LogCategory.NETWORK, "Update check failed: ${it.message}")
             return UpdateCheckResult.Failed(it.message ?: "Could not reach GitHub", it)
         }
-        if (!isNewer(release.tag_name, currentVersion)) {
+        if (!ReleaseVersion.isNewer(release.tag_name, currentVersion)) {
             return UpdateCheckResult.UpToDate(currentVersion)
         }
         val asset = release.assets.firstOrNull { it.name.endsWith(".apk") }
             ?: return UpdateCheckResult.Failed("Release ${release.tag_name} has no APK asset attached")
-        return UpdateCheckResult.Available(currentVersion, release.tag_name, asset.browser_download_url, asset.size)
+        return UpdateCheckResult.Available(currentVersion, release.tag_name, asset.browser_download_url, asset.size, asset.digest)
     }
 
     /** Downloads [downloadUrl] into the cache dir, then launches the system install prompt. */
-    fun downloadAndInstall(downloadUrl: String, expectedSize: Long): Flow<UpdateDownloadState> = flow {
+    fun downloadAndInstall(downloadUrl: String, expectedSize: Long, expectedDigest: String? = null): Flow<UpdateDownloadState> = flow {
         val apkFile = File(context.cacheDir, "skullshell-update.apk")
-        val connection = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = 15_000
-            readTimeout = 30_000
-        }
         try {
-            val code = connection.responseCode
-            if (code !in 200..299) throw java.io.IOException("Download failed with HTTP $code for $downloadUrl")
-            val total = connection.contentLengthLong.takeIf { it > 0 } ?: expectedSize
-
-            connection.inputStream.use { input ->
-                FileOutputStream(apkFile).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var downloaded = 0L
-                    var lastEmit = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        output.write(buffer, 0, read)
-                        downloaded += read
-                        if (downloaded - lastEmit > 512 * 1024 || downloaded == total) {
-                            emit(UpdateDownloadState.Downloading(downloaded, total))
-                            lastEmit = downloaded
-                        }
-                    }
-                }
+            downloadFile(downloadUrl, apkFile, expectedSize, expectedDigest) { count, total ->
+                emit(UpdateDownloadState.Downloading(count, total))
             }
-            AppLog.i(LogCategory.NETWORK, "Downloaded update APK from $downloadUrl (${apkFile.length()} bytes)")
+            validateUpdate(apkFile)
             promptInstall(apkFile)
             emit(UpdateDownloadState.ReadyToInstall)
+        } catch (e: CancellationException) { throw e
         } catch (e: Exception) {
-            AppLog.e(LogCategory.NETWORK, "Update download failed: ${e.stackTraceToString()}")
+            apkFile.delete()
+            AppLog.e(LogCategory.NETWORK, "Update download failed: ${e.message}")
             emit(UpdateDownloadState.Failed(e.message ?: "Download failed", e))
-        } finally {
-            connection.disconnect()
         }
     }.flowOn(Dispatchers.IO)
+
+    @Suppress("DEPRECATION")
+    internal fun validateUpdate(apkFile: File) {
+        val manager = context.packageManager
+        val incoming = checkNotNull(manager.getPackageArchiveInfo(apkFile.absolutePath, PackageManager.GET_SIGNING_CERTIFICATES)) {
+            "The downloaded file is not a valid Android package"
+        }
+        check(incoming.packageName == context.packageName) {
+            "This release is for a different app variant. Install a matching release build to receive updates."
+        }
+        val current = manager.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        check(incoming.longVersionCode > current.longVersionCode) { "This package is not newer than the installed app" }
+        val signers = current.signingInfo?.apkContentsSigners.orEmpty()
+        val incomingInfo = checkNotNull(incoming.signingInfo) { "The update has no signing certificate" }
+        val history = if (incomingInfo.hasMultipleSigners()) incomingInfo.apkContentsSigners else incomingInfo.signingCertificateHistory
+        check(signers.isNotEmpty() && signers.all { signer -> history.any { it == signer } }) {
+            "The update's signing certificate does not match this app"
+        }
+    }
 
     private fun promptInstall(apkFile: File) {
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apkFile)
@@ -105,19 +102,4 @@ class AppUpdateManager(private val context: Context) {
         context.startActivity(intent)
     }
 
-    /** Loose semver comparison: strips a leading "v", compares dot-separated numeric parts. */
-    private fun isNewer(latestTag: String, currentVersion: String): Boolean {
-        val latest = latestTag.removePrefix("v").removePrefix("V")
-        if (latest == currentVersion) return false
-        val latestParts = latest.split(".").mapNotNull { it.toIntOrNull() }
-        val currentParts = currentVersion.split(".").mapNotNull { it.toIntOrNull() }
-        if (latestParts.isEmpty() || currentParts.isEmpty()) return latest != currentVersion
-        val length = maxOf(latestParts.size, currentParts.size)
-        for (i in 0 until length) {
-            val l = latestParts.getOrElse(i) { 0 }
-            val c = currentParts.getOrElse(i) { 0 }
-            if (l != c) return l > c
-        }
-        return false
-    }
 }

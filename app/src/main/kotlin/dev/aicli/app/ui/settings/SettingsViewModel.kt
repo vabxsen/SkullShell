@@ -6,6 +6,9 @@ import dev.aicli.app.ui.common.InstallProgressUi
 import dev.aicli.app.ui.install.toInstallEvent
 import dev.aicli.app.update.AppUpdateManager
 import dev.aicli.app.update.UpdateCheckResult
+import dev.aicli.app.data.SessionManager
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import dev.aicli.core.settings.AdvancedSettings
 import dev.aicli.core.settings.AppearanceSettings
 import dev.aicli.core.settings.SettingsRepository
@@ -29,7 +32,10 @@ class SettingsViewModel(
     private val bootstrapManager: BootstrapManager,
     private val appUpdateManager: AppUpdateManager,
     val providers: List<AIProvider>,
+    private val sessionManager: SessionManager,
 ) : ViewModel() {
+    private var repairJob: Job? = null
+    private var updateJob: Job? = null
 
     val uiData: StateFlow<SettingsUiData?> = combine(
         settingsRepository.appearanceSettings,
@@ -74,14 +80,24 @@ class SettingsViewModel(
     }
 
     fun repairRuntime() {
-        viewModelScope.launch {
+        if (repairJob?.isActive == true) return
+        if (sessionManager.runningCount.value > 0) {
+            _repairProgress.value = InstallProgressUi("bootstrap", "Linux runtime", InstallEvent.Failed("repair", "Close your running terminal sessions before repairing the runtime."), done = true)
+            return
+        }
+        repairJob = viewModelScope.launch {
             _repairProgress.value = InstallProgressUi("bootstrap", "Linux runtime", null, done = false)
+            try {
             bootstrapManager.install(forceReinstall = true).collect { state ->
                 val event = state.toInstallEvent()
                 _repairProgress.value = InstallProgressUi(
                     "bootstrap", "Linux runtime", event,
                     done = event is InstallEvent.Completed || event is InstallEvent.Failed,
                 )
+            }
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                _repairProgress.value = InstallProgressUi("bootstrap", "Linux runtime", InstallEvent.Failed("repair", e.message ?: "Repair failed", e), done = true)
             }
         }
     }
@@ -97,7 +113,8 @@ class SettingsViewModel(
      * handing off to Android's own package-installer UI, not a "tap to install" step of our own.
      */
     fun checkForUpdate() {
-        viewModelScope.launch {
+        if (updateJob?.isActive == true) return
+        updateJob = viewModelScope.launch {
             _updateStatus.value = "Checking for updates…"
             when (val result = appUpdateManager.checkForUpdate()) {
                 is UpdateCheckResult.UpToDate ->
@@ -107,7 +124,7 @@ class SettingsViewModel(
                 is UpdateCheckResult.Available -> {
                     _updateStatus.value = null
                     _updateProgress.value = InstallProgressUi("update", "SkullShell ${result.latestVersion}", null, done = false)
-                    appUpdateManager.downloadAndInstall(result.downloadUrl, result.assetSize).collect { state ->
+                    appUpdateManager.downloadAndInstall(result.downloadUrl, result.assetSize, result.digest).collect { state ->
                         val event = state.toInstallEvent()
                         if (event is InstallEvent.Completed) {
                             // The system installer prompt now owns the screen — dismiss our sheet

@@ -1,240 +1,140 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package dev.aicli.app.ui.settings
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.aicli.app.BuildConfig
 import dev.aicli.app.ui.components.InstallProgressSheet
 import dev.aicli.app.ui.components.SettingsRow
-import dev.aicli.app.ui.design.GhostButton
-import dev.aicli.app.ui.design.Label
-import dev.aicli.app.ui.design.Metrics
-import dev.aicli.app.ui.design.Modal
-import dev.aicli.app.ui.design.PageTitle
-import dev.aicli.app.ui.design.RadioMark
-import dev.aicli.app.ui.design.Rule
-import dev.aicli.app.ui.design.Screen
-import dev.aicli.app.ui.design.SectionHeader
-import dev.aicli.app.ui.design.SkullTheme
-import dev.aicli.app.ui.design.Slider
-import dev.aicli.app.ui.design.Space
-import dev.aicli.app.ui.design.Text
-import dev.aicli.app.ui.design.Toggle
-import dev.aicli.app.ui.design.TopBar
-import dev.aicli.app.ui.design.pressable
+import dev.aicli.app.ui.design.*
 import dev.aicli.core.settings.ThemeMode
 
-private val MAX_MEASURE = 720.dp
-
-/**
- * The "Dynamic color" preference is gone, and not by oversight: it derived the palette from the
- * user's wallpaper, which cannot mean anything in an app with no palette to derive. Theme mode
- * stays, because light and dark are both real here - the scheme inverts rather than recolouring.
- */
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel) {
+fun SettingsScreen(viewModel: SettingsViewModel, onBack: () -> Unit, onOpenHome: () -> Unit,
+                   onOpenProjects: () -> Unit, onOpenTerminal: () -> Unit, onOpenProviders: () -> Unit,
+                   onOpenDiagnostics: () -> Unit) {
     val data by viewModel.uiData.collectAsStateWithLifecycle()
     val repairProgress by viewModel.repairProgress.collectAsStateWithLifecycle()
     val updateStatus by viewModel.updateStatus.collectAsStateWithLifecycle()
     val updateProgress by viewModel.updateProgress.collectAsStateWithLifecycle()
-    var showThemeDialog by remember { mutableStateOf(false) }
-
-    Screen(topBar = { TopBar(crumb = "SkullShell / Settings") }) {
-        Box(Modifier.widthIn(max = MAX_MEASURE).fillMaxSize().align(Alignment.TopCenter)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = Space.x12),
-            ) {
-                item {
-                    PageTitle(
-                        title = "Settings",
-                        modifier = Modifier.padding(horizontal = Metrics.gutter, vertical = Space.x6),
-                    )
+    var confirmRepair by rememberSaveable { mutableStateOf(false) }
+    var confirmReset by rememberSaveable { mutableStateOf(false) }
+    val scheme = MaterialTheme.colorScheme
+    Screen(topBar = { TopBar("Settings", onBack = onBack, showSettings = false) }) {
+        LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize().align(Alignment.TopCenter),
+            contentPadding = PaddingValues(start = Metrics.gutter, end = Metrics.gutter, top = Space.x2, bottom = Space.x8),
+            verticalArrangement = Arrangement.spacedBy(Space.x3)) {
+            item { SettingsSection("Workspace") }
+            item {
+                Panel {
+                    SettingsRow("Home", icon = Glyphs.Home, onClick = onOpenHome)
+                    SettingsRow("Projects", icon = Glyphs.Folder, onClick = onOpenProjects)
+                    SettingsRow("Terminal", icon = Glyphs.Terminal, onClick = onOpenTerminal)
+                    SettingsRow("Agents", icon = Glyphs.Grid, onClick = onOpenProviders)
+                    SettingsRow("Diagnostics", icon = Glyphs.Info, onClick = onOpenDiagnostics)
                 }
-
-                section("Appearance")
-                data?.appearance?.let { appearance ->
-                    item {
-                        SettingsRow(
-                            title = "Theme",
-                            value = themeModeLabel(appearance.themeMode),
-                            onClick = { showThemeDialog = true },
-                        )
-                        Rule()
-                    }
-                }
-
-                section("Terminal")
-                data?.terminal?.let { terminal ->
-                    item {
-                        Column(Modifier.padding(horizontal = Metrics.gutter, vertical = Space.x4)) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text("Font size", style = SkullTheme.type.body, color = SkullTheme.colors.ink)
-                                Rule(Modifier.padding(horizontal = Space.x3).weight(1f))
-                                Text(
-                                    terminal.fontSize.toInt().toString() + "sp",
-                                    style = SkullTheme.type.mono,
-                                    color = SkullTheme.colors.inkMuted,
-                                )
-                            }
-                            Slider(
-                                value = terminal.fontSize,
-                                onValueChange = { newSize -> viewModel.updateTerminal { it.copy(fontSize = newSize) } },
-                                valueRange = 9f..24f,
-                            )
+            }
+            item { SettingsSection("Appearance") }
+            item {
+                Panel {
+                    Column(Modifier.padding(Space.x4)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Glyph(Glyphs.Palette, null, tint = scheme.primary)
+                            Text("App theme", style = SkullTheme.type.heading, modifier = Modifier.padding(start = Space.x4))
                         }
-                        Rule()
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = Space.x4)) {
+                            ThemeMode.entries.forEachIndexed { index, mode ->
+                                SegmentedButton(selected = (data?.appearance?.themeMode ?: ThemeMode.SYSTEM) == mode,
+                                    onClick = { viewModel.setThemeMode(mode) }, shape = SegmentedButtonDefaults.itemShape(index, ThemeMode.entries.size)) {
+                                    androidx.compose.material3.Text(when (mode) { ThemeMode.SYSTEM -> "System"; ThemeMode.LIGHT -> "Light"; ThemeMode.DARK -> "Dark" })
+                                }
+                            }
+                        }
                     }
-                    item {
-                        SettingsRow(
-                            title = "Cursor blink",
-                            trailing = {
-                                Toggle(
-                                    checked = terminal.cursorBlink,
-                                    onCheckedChange = { on -> viewModel.updateTerminal { it.copy(cursorBlink = on) } },
-                                )
-                            },
-                        )
-                        Rule()
-                    }
-                    item {
-                        SettingsRow(
-                            title = "Copy on select",
-                            trailing = {
-                                Toggle(
-                                    checked = terminal.copyOnSelect,
-                                    onCheckedChange = { on -> viewModel.updateTerminal { it.copy(copyOnSelect = on) } },
-                                )
-                            },
-                        )
-                        Rule()
-                    }
+                    SettingsRow("Wallpaper colors", description = "Match your device's color palette", icon = Glyphs.Palette, trailing = {
+                        Toggle(data?.appearance?.dynamicColorEnabled ?: true, viewModel::setDynamicColorEnabled,
+                            Modifier.semantics { contentDescription = "Wallpaper colors" })
+                    })
                 }
-
-                section("Runtime")
+            }
+            item { SettingsSection("Terminal") }
+            data?.terminal?.let { terminal ->
                 item {
-                    SettingsRow(
-                        title = "Repair runtime",
-                        description = "Re-installs the Linux userland from scratch.",
-                        onClick = viewModel::repairRuntime,
-                    )
-                    Rule()
-                }
-
-                section("Providers")
-                items(viewModel.providers, key = { it.id }) { provider ->
-                    SettingsRow(title = provider.displayName, value = provider.id)
-                    Rule()
-                }
-
-                section("Advanced")
-                data?.advanced?.let { advanced ->
-                    item {
-                        SettingsRow(
-                            title = "Debug logging",
-                            trailing = {
-                                Toggle(checked = advanced.debugLogging, onCheckedChange = viewModel::setDebugLogging)
-                            },
-                        )
-                        Rule()
+                    Panel {
+                        Column(Modifier.padding(Space.x4)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Text size", modifier = Modifier.weight(1f))
+                                Text("${terminal.fontSize.toInt()} sp", style = SkullTheme.type.label, color = scheme.primary)
+                            }
+                            Slider(terminal.fontSize, { viewModel.updateTerminal { settings -> settings.copy(fontSize = it) } },
+                                9f..24f, Modifier.semantics { contentDescription = "Terminal text size" })
+                            Surface(shape = MaterialTheme.shapes.medium, color = scheme.surfaceContainerHighest) {
+                                Text("Aa Bb 0123456789", style = SkullTheme.type.mono.copy(fontSize = terminal.fontSize.sp),
+                                    modifier = Modifier.fillMaxWidth().padding(Space.x4), maxLines = 1)
+                            }
+                        }
+                        SettingsRow("Blinking cursor", icon = Glyphs.Terminal, trailing = {
+                            Toggle(terminal.cursorBlink, { viewModel.updateTerminal { settings -> settings.copy(cursorBlink = it) } },
+                                Modifier.semantics { contentDescription = "Blinking cursor" })
+                        })
+                        SettingsRow("Copy on selection", icon = Glyphs.Copy, trailing = {
+                            Toggle(terminal.copyOnSelect, { viewModel.updateTerminal { settings -> settings.copy(copyOnSelect = it) } },
+                                Modifier.semantics { contentDescription = "Copy on selection" })
+                        })
                     }
                 }
-                item {
-                    SettingsRow(title = "Reset all settings", onClick = viewModel::resetAllSettings)
-                    Rule()
+            }
+            item { SettingsSection("Environment") }
+            item {
+                Panel { SettingsRow("Set up or repair runtime", description = "Install the Linux terminal environment", icon = Glyphs.Download, onClick = { confirmRepair = true }) }
+            }
+            item { SettingsSection("Advanced") }
+            item {
+                Panel {
+                    SettingsRow("Debug logging", description = "Include additional diagnostic details", icon = Glyphs.Code, trailing = {
+                        Toggle(data?.advanced?.debugLogging ?: false, viewModel::setDebugLogging,
+                            Modifier.semantics { contentDescription = "Debug logging" })
+                    })
+                    SettingsRow("Reset preferences", icon = Glyphs.Refresh, onClick = { confirmReset = true })
                 }
-
-                section("About")
-                item {
-                    SettingsRow(title = "SkullShell", value = "v" + BuildConfig.VERSION_NAME)
-                    Rule()
-                }
-                item {
-                    SettingsRow(
-                        title = "Check for update",
-                        description = updateStatus,
-                        onClick = viewModel::checkForUpdate,
-                    )
-                    Rule()
+            }
+            item { SettingsSection("About") }
+            item {
+                Panel {
+                    SettingsRow("SkullShell", icon = Glyphs.Terminal, value = "v${BuildConfig.VERSION_NAME}")
+                    SettingsRow("Check for updates", description = updateStatus, icon = Glyphs.Info, onClick = viewModel::checkForUpdate)
                 }
             }
         }
     }
-
-    repairProgress?.let { InstallProgressSheet(it, onDismiss = viewModel::dismissRepairProgress) }
-    updateProgress?.let { InstallProgressSheet(it, onDismiss = viewModel::dismissUpdateProgress) }
-
-    if (showThemeDialog) {
-        data?.appearance?.let { appearance ->
-            ThemeModeDialog(
-                current = appearance.themeMode,
-                onSelect = { viewModel.setThemeMode(it); showThemeDialog = false },
-                onDismiss = { showThemeDialog = false },
-            )
-        }
-    }
-}
-
-/** Section headings sit above the rules that separate the rows beneath them. */
-private fun androidx.compose.foundation.lazy.LazyListScope.section(title: String) {
-    item {
-        SectionHeader(
-            title,
-            Modifier.padding(
-                start = Metrics.gutter,
-                end = Metrics.gutter,
-                top = Space.x6,
-                bottom = Space.x3,
-            ),
-        )
-        Rule()
-    }
-}
-
-private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
-    ThemeMode.SYSTEM -> "System"
-    ThemeMode.LIGHT -> "Light"
-    ThemeMode.DARK -> "Dark"
+    repairProgress?.let { InstallProgressSheet(it, viewModel::dismissRepairProgress) }
+    updateProgress?.let { InstallProgressSheet(it, viewModel::dismissUpdateProgress) }
+    if (confirmRepair) Modal("Set up the runtime", { confirmRepair = false }, actions = {
+        GhostButton("Cancel", { confirmRepair = false })
+        GhostButton("Continue", { confirmRepair = false; viewModel.repairRuntime() })
+    }) { Text("This installs a fresh Linux environment. Existing packages and agent binaries in the runtime are replaced; your projects and home files are kept. Close your terminal sessions first, then reinstall any agents you use.", color = scheme.onSurfaceVariant) }
+    if (confirmReset) Modal("Reset preferences?", { confirmReset = false }, actions = {
+        GhostButton("Cancel", { confirmReset = false })
+        GhostButton("Reset", { viewModel.resetAllSettings(); confirmReset = false })
+    }) { Text("Appearance and terminal preferences will return to their defaults.", color = scheme.onSurfaceVariant) }
 }
 
 @Composable
-private fun ThemeModeDialog(current: ThemeMode, onSelect: (ThemeMode) -> Unit, onDismiss: () -> Unit) {
-    Modal(
-        title = "Theme",
-        onDismiss = onDismiss,
-        actions = { GhostButton("Close", onDismiss) },
-    ) {
-        ThemeMode.entries.forEach { mode ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .pressable { onSelect(mode) }
-                    .padding(vertical = Space.x3),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioMark(selected = mode == current)
-                Label(
-                    themeModeLabel(mode),
-                    color = if (mode == current) SkullTheme.colors.ink else SkullTheme.colors.inkMuted,
-                    modifier = Modifier.padding(start = Space.x4),
-                )
-            }
-        }
-    }
+private fun SettingsSection(title: String) {
+    Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = Space.x4, top = Space.x3, bottom = Space.x1))
 }

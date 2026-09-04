@@ -12,15 +12,11 @@ This README is the map; that document is the territory.
 
 ## Current status
 
-Builds clean end-to-end: `./gradlew assembleDebug` produces an installable APK across
-all 9 modules including the native JNI PTY layer (3 ABIs). Installed and exercised on
-an x86_64 Android 15 emulator this session — see ARCHITECTURE.md's "Verified on-device"
-section for exactly what was and wasn't confirmed working, including two real bugs found
-and fixed via that testing (a foreground-service lifecycle bug, and a blank-screen-on-
-process-exit bug). **Not yet verified on real ARM64 hardware, and no provider's install
-flow has been run start-to-finish against the live network in one session** — both are
-explicit, tracked gaps, not silent ones. Read ARCHITECTURE.md's "Known Limitations"
-before treating any provider as production-ready.
+A functional audit was completed with real builds, JVM tests and on-device
+instrumentation on the dedicated SkullShell_UI_Review Android 15 x86_64 emulator.
+See [docs/FEATURE_AUDIT.md](docs/FEATURE_AUDIT.md) for verified workflows and coverage
+limits. Provider account sign-in, paid/API requests and physical ARM64 execution
+require separate testing; install/launch checks do not prove authenticated usage.
 
 ## Building
 
@@ -69,9 +65,7 @@ app module and terminal engine don't need to change.
 
 ## Licensing
 
-This project's own code is MIT-licensed (see [`LICENSE`](LICENSE)). It downloads and
-executes (never vendors) third-party binary distributions at runtime — Termux's
-bootstrap, Alpine Linux's minirootfs, npm/GitHub-hosted CLI binaries. See
-[`THIRD_PARTY_NOTICES/`](THIRD_PARTY_NOTICES/) for what's consumed and how, and
-ARCHITECTURE.md §2 for why that consumption model keeps this app's own MIT license
-independent of the GPL-licensed components it interacts with at runtime.
+The application's own source is MIT licensed. The APK bundles unmodified PRoot,
+its loader, libtalloc and libandroid-shmem with their respective licenses, source
+archives and build recipes. Other runtime packages and agents are downloaded from
+their publishers on the device. See [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES/README.md).

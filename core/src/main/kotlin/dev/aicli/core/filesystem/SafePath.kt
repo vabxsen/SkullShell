@@ -5,18 +5,13 @@ import java.io.IOException
 
 class PathTraversalException(message: String) : SecurityException(message)
 
-/**
- * Resolves a user- or CLI-supplied relative path against a fixed root and refuses anything that
- * canonicalizes outside it. Every filesystem call this app makes on behalf of a spawned process
- * (git, node, the CLIs themselves) — cwd, argv paths, file read/write from the UI's file browser
- * — goes through this first. This is the boundary that keeps "the CLI can do anything inside the
- * workspace" from becoming "the CLI can do anything on the device."
- */
+/** Confines the app's file API to a root. Arbitrary CLI processes do not use this API. */
 object SafePath {
     /**
      * @throws PathTraversalException if [requested] resolves outside [root].
      */
     fun resolve(root: File, requested: String): File {
+        requireRelative(requested)
         val canonicalRoot = root.canonicalFile
         val candidate = File(canonicalRoot, requested)
         val canonicalCandidate = try {
@@ -28,6 +23,23 @@ object SafePath {
             throw PathTraversalException("Path '$requested' escapes root '${canonicalRoot.path}'")
         }
         return canonicalCandidate
+    }
+
+    /** Delete/rename the directory entry itself, without following its final symlink. */
+    fun entry(root: File, requested: String): File {
+        requireRelative(requested)
+        val base = root.canonicalFile.toPath()
+        val target = base.resolve(requested).normalize()
+        if (!target.startsWith(base) || (target != base && !target.parent.toFile().canonicalFile.toPath().startsWith(base))) {
+            throw PathTraversalException("Path '$requested' escapes root")
+        }
+        return target.toFile()
+    }
+
+    private fun requireRelative(requested: String) {
+        if (File(requested).isAbsolute || requested.startsWith('/') || requested.startsWith('\\') || Regex("^[A-Za-z]:").containsMatchIn(requested)) {
+            throw PathTraversalException("Expected a relative workspace path")
+        }
     }
 
     fun isWithin(root: File, candidate: File): Boolean = try {

@@ -26,7 +26,7 @@ import dev.aicli.runtime.pkg.PackageManager
  */
 class AppContainer(private val context: Context) {
     val settingsRepository = SettingsRepository(context)
-    val secretStore = SecretStore(context)
+    val secretStore by lazy { SecretStore(context) }
     val termuxEnvironment = TermuxEnvironment(context)
     val bootstrapManager = BootstrapManager(context)
     val appUpdateManager = AppUpdateManager(context)

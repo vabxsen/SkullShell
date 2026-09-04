@@ -1,69 +1,56 @@
-# Third-Party Notices
+# Third-party notices and source
 
-This app's own source is original work, MIT-licensed (see [`LICENSE`](../LICENSE) at
-the repository root). It **downloads and executes, at runtime, on the user's device**,
-several third-party distributions it does not vendor or redistribute in the APK. This
-file records what those are, where they come from, and why consuming them this way
-doesn't extend their license to this app's own code.
+SkullShell's application source is MIT licensed (see the repository's LICENSE).
+The APK also contains the following unmodified native components, invoked as a
+separate PRoot process. Their own licenses continue to apply to those components.
 
-## Termux bootstrap (`runtime/.../bootstrap/BootstrapManager.kt`)
+| Component | Version | License | Upstream source |
+| --- | --- | --- | --- |
+| PRoot and its executable loader | 5.1.107.92 | GPL-2.0-or-later | https://github.com/termux/proot/tree/v5.1.107.92 |
+| libtalloc shared library | 2.4.3 | LGPL-3.0-or-later | https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz |
+| libandroid-shmem | 0.7 | BSD-3-Clause | https://github.com/termux/libandroid-shmem/tree/v0.7 |
 
-- **What**: `bootstrap-<abi>.zip` from `github.com/termux/termux-packages` releases —
-  a prebuilt Bionic-targeted Linux userland (bash, coreutils, dpkg/apt, and, once
-  packages are installed, Node.js, git, etc.), plus `termux-exec`'s LD_PRELOAD shim.
-- **License**: individual packages vary (mostly GPL/LGPL/MIT/BSD upstream projects
-  cross-compiled by the termux-packages project); `termux-exec` itself is
-  Apache-2.0/MIT per its own `share/doc/termux-exec/licenses/` (verified in the
-  extracted archive).
-- **How consumed**: downloaded and extracted into this app's own private storage at
-  first run, exactly as the official `termux-app` APK does on a user's device — this
-  app does not vendor Termux's application source (which is GPLv3), only consumes its
-  public binary package distribution, the same way an `apt` user on Debian consumes
-  Debian's compiled packages without inheriting GPL onto their own unrelated software.
+The original source archives, SHA-256 hashes, Termux package recipes and patches,
+and build-reference commit are in `sources/`. License texts are in `licenses/`.
+This entire directory is included in the APK's assets, so source and notices travel
+with the binaries. PRoot/loader files are renamed for Android native-library
+packaging; their bytes are unchanged. The library libtalloc is LGPL licensed per
+its own LICENSE and talloc.h (the broader Termux package metadata says GPL-3.0).
+The GPLv3 text incorporated by LGPLv3 is included as well.
 
-## Alpine Linux minirootfs (`runtime/.../foreignlibc/ForeignLibcRuntime.kt`)
+`runtime/src/main/jniLibs/manifest.json` and `sources/binary-manifest.json` record
+the exact official Termux binary packages and per-file hashes for x86_64, ARM64,
+and ARMv7. `tools/fetch-native-runtime.ps1` restores those pinned packages. See
+`sources/BUILDING.md` for source rebuilding and replacing the native components.
 
-- **What**: `alpine-minirootfs-<version>-<arch>.tar.gz` from
-  `dl-cdn.alpinelinux.org`, used to provide a real musl libc + dynamic loader for
-  CLI binaries (Claude Code) that link against musl rather than Bionic.
-- **License**: Alpine's base system is a mix of MIT/BSD-licensed components (musl libc
-  itself is MIT).
-- **How consumed**: downloaded and extracted at runtime on the user's device, run via
-  `proot` (not vendored, not modified, not redistributed by this app).
+## Downloads made on the device
 
-## proot
+These distributions are fetched directly from their publishers when selected;
+they are not included in the APK:
 
-- **What**: a ptrace-based `chroot`-alike, installed via `apt install proot` from
-  Termux's own package repository, used to give musl/glibc-linked binaries a
-  consistent filesystem view without root.
-- **License**: GPLv2 (upstream `proot-ng`/`proot` project).
-- **How consumed**: installed as an unmodified binary package via the same apt
-  mechanism as every other bootstrap tool; invoked as a separate process, not linked
-  into this app's own code.
+- Termux bootstrap and apt packages: https://github.com/termux/termux-packages .
+  Each package retains its upstream license and installed notices. The package set
+  includes GPL and LGPL software, among other licenses.
+- Alpine minirootfs and C++ runtime packages: https://alpinelinux.org . Components
+  include musl (MIT), BusyBox (GPL-2.0), apk-tools (GPL-2.0), and GCC runtime libraries
+  (GPL with the GCC runtime library exception). Rootfs hashes and apk repository
+  signatures are checked during installation.
+- Ubuntu Base: https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ .
+  Licenses vary by package; the root filesystem retains its copyright notices.
+- Claude Code: Anthropic's official platform package in the npm registry.
+- Codex CLI: https://github.com/openai/codex/releases .
+- OpenCode: https://github.com/anomalyco/opencode/releases .
+- Antigravity CLI: the release manifest used by https://antigravity.google/cli/install.sh .
+  The respective publisher's license and service terms govern each CLI.
 
-## npm-distributed CLI binaries (Claude Code, OpenCode) and GitHub-released binaries
-## (Codex CLI, Antigravity CLI)
+SkullShell does not reimplement provider authentication. The CLIs manage their
+credentials in the app's private home directory; those files are not encrypted by
+SkullShell's separate SecretStore. Android app backups are disabled.
 
-- **What**: each provider's own official binary, fetched directly from its publisher's
-  npm registry package or GitHub Releases at install time, on the user's device, using
-  the user's own account/credentials for any auth the CLI itself requires.
-- **License / distribution terms**: each publisher's own (Anthropic, OpenAI, the
-  OpenCode project, Google) — this app does not redistribute these binaries; it
-  automates the same download a user would otherwise run by hand, per each project's
-  own published installation instructions.
+## JVM and Android dependencies
 
-## AndroidX / Jetpack / Kotlin libraries
-
-Compose, Material3, Navigation, DataStore, Room, WorkManager, Security-Crypto,
-kotlinx.coroutines, kotlinx.serialization — all Apache-2.0, declared in
-`gradle/libs.versions.toml` and pulled from Google's/JetBrains' Maven repositories at
-build time. Standard Android dependency licensing; no special handling needed beyond
-what a standard Android app already does (their licenses are bundled into the app's
-`/META-INF/` NOTICE files by AGP automatically).
-
-## Maintainer note
-
-Before a public release, replace this file with a generated NOTICE (e.g. via the
-Gradle License plugin) enumerating exact versions and license texts of every
-third-party build dependency — that level of detail wasn't finalized in this session.
-The project's own license (MIT, `LICENSE` at the repository root) is set.
+AndroidX (including Compose, Material3, Navigation, DataStore, Room and Security),
+Kotlin, kotlinx.coroutines and kotlinx.serialization are Apache-2.0 projects.
+Version declarations are in `gradle/libs.versions.toml` and module build files.
+The app's own code does not link to libtalloc or PRoot through JNI: its JNI library
+only supplies PTY process primitives, and starts the separate PRoot executable.

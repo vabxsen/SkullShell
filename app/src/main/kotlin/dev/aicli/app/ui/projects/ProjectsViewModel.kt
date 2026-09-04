@@ -23,6 +23,8 @@ class ProjectsViewModel(private val repository: ProjectRepository) : ViewModel()
 
     private val _events = MutableStateFlow<String?>(null)
     val events: StateFlow<String?> = _events
+    private val _busy = MutableStateFlow(false)
+    val busy: StateFlow<Boolean> = _busy
 
     fun createAppWorkspace(name: String) {
         viewModelScope.launch {
@@ -32,14 +34,34 @@ class ProjectsViewModel(private val repository: ProjectRepository) : ViewModel()
     }
 
     fun registerExternalProject(name: String, treeUri: Uri) {
+        if (_busy.value) return
         viewModelScope.launch {
-            runCatching { repository.registerExternalProject(name, treeUri) }
-                .onFailure { _events.value = "Couldn't open project: ${it.message}" }
+            _busy.value = true
+            try {
+                repository.registerExternalProject(name, treeUri)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { _events.value = "Couldn't open project: ${e.message}"
+            } finally { _busy.value = false }
         }
     }
 
     fun removeProject(projectId: String) {
-        viewModelScope.launch { repository.remove(projectId) }
+        viewModelScope.launch {
+            runCatching { repository.remove(projectId) }.onFailure { _events.value = "Couldn't remove project: ${it.message}" }
+        }
+    }
+
+    fun saveToFolder(projectId: String) {
+        if (_busy.value) return
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                val count = repository.saveToFolder(projectId)
+                _events.value = if (count == 0) "No changes to save" else "Saved $count file changes to the folder"
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { _events.value = "Couldn't save changes: ${e.message}"
+            } finally { _busy.value = false }
+        }
     }
 
     fun clearEvent() { _events.value = null }

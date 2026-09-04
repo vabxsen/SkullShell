@@ -4,16 +4,22 @@ import android.content.Context
 import dev.aicli.core.logging.AppLog
 import dev.aicli.core.logging.LogCategory
 import dev.aicli.core.networking.GitHubReleaseResolver
+import dev.aicli.core.networking.downloadFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.security.MessageDigest
 import java.util.zip.ZipInputStream
+import dev.aicli.runtime.archive.ArchivePaths
+import dev.aicli.terminal.runPtyCommand
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import dev.aicli.runtime.pkg.PackageManager
+import dev.aicli.runtime.pkg.PackageInstallEvent
+import dev.aicli.core.filesystem.SafeFiles
+import java.nio.file.Files
 
 /**
  * Real, observed install state for the Linux userland — never a badge that just claims "Ready".
@@ -50,7 +56,20 @@ class BootstrapManager(private val context: Context) {
     private val symlinkSeparator = "←"
 
     fun install(forceReinstall: Boolean = false): Flow<BootstrapState> = flow {
+      installMutex.withLock {
+        val staged = File(context.filesDir, "usr-install")
+        val backup = File(context.filesDir, "usr-backup")
+        var replaced = false
+        var success = false
         try {
+            // Recover a setup interrupted after the directory swap but before verification.
+            if (backup.exists()) {
+                if (env.isBootstrapInstalled) SafeFiles.deleteTree(backup)
+                else {
+                    check(SafeFiles.deleteTree(env.prefixDir))
+                    Files.move(backup.toPath(), env.prefixDir.toPath())
+                }
+            }
             if (!forceReinstall && env.isBootstrapInstalled && env.hasTermuxExec) {
                 emit(BootstrapState.Ready)
                 return@flow
@@ -73,80 +92,78 @@ class BootstrapManager(private val context: Context) {
             AppLog.i(LogCategory.RUNTIME, "Resolved bootstrap ${release.tag_name} / $assetName (${asset.size} bytes)")
 
             val downloadFile = File(context.cacheDir, assetName)
-            downloadWithProgress(asset.browser_download_url, downloadFile, asset.size) { downloaded, total ->
+            downloadFile(asset.browser_download_url, downloadFile, asset.size, asset.digest) { downloaded, total ->
                 emit(BootstrapState.Downloading(downloaded, total))
             }
 
-            extractBootstrap(downloadFile) { extracted, total ->
+            check(SafeFiles.deleteTree(staged)) { "Could not clear unfinished runtime setup" }
+            check(staged.mkdirs())
+            extractBootstrap(downloadFile, staged) { extracted, total ->
                 emit(BootstrapState.Extracting(extracted, total))
             }
 
             downloadFile.delete()
 
-            if (!env.isBootstrapInstalled) {
+            Files.move(env.prefixDir.toPath(), backup.toPath())
+            try { Files.move(staged.toPath(), env.prefixDir.toPath()) }
+            catch (e: Exception) { Files.move(backup.toPath(), env.prefixDir.toPath()); throw e }
+            replaced = true
+            env.ensureDirectoriesExist()
+
+            if (!File(env.prefixDir, "bin/bash").exists()) {
                 throw BootstrapException("Extraction completed but no shell binary was found at \$PREFIX/bin")
             }
             if (!env.hasTermuxExec) {
                 throw BootstrapException(
-                    "Extraction completed but termux-exec's LD_PRELOAD shim is missing — process " +
-                        "spawning inside the bootstrap will fail with EACCES on API 29+ (see ARCHITECTURE.md §2a)"
+                    "The bundled runtime support is missing for this device architecture. Reinstall the app."
                 )
             }
 
+            val probe = runPtyCommand(env.wrapForExec(listOf(File(env.prefixDir, "bin/bash").absolutePath,
+                "-c", "ls --version && apt --version")), env.buildEnvironment(), env.homeDir.absolutePath)
+            probe.requireSuccess()
+            val packages = PackageManager(context)
+            if (!packages.isInstalled("node") || !packages.isInstalled("npm") || !packages.isInstalled("git")) {
+                emit(BootstrapState.Resolving("Installing Node.js, npm, Git and ripgrep…"))
+                for (step in listOf(packages.update(), packages.install(listOf("nodejs-lts", "npm", "git", "ripgrep")))) {
+                    val recent = ArrayDeque<String>()
+                    step.collect { event -> when (event) {
+                        is PackageInstallEvent.Output -> {
+                            recent.addLast(event.line)
+                            while (recent.size > 12) recent.removeFirst()
+                            emit(BootstrapState.Resolving(event.line.takeLast(300)))
+                        }
+                        is PackageInstallEvent.Completed -> if (event.exitCode != 0) {
+                            throw BootstrapException("Package setup failed (exit ${event.exitCode}): ${recent.joinToString("\n")}")
+                        }
+                    } }
+                }
+            }
+            File(env.prefixDir, ".skullshell-ready").writeText(release.tag_name)
+            success = true
+            SafeFiles.deleteTree(backup)
+
             AppLog.i(LogCategory.RUNTIME, "Bootstrap ready at ${env.prefixDir}")
             emit(BootstrapState.Ready)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: BootstrapException) {
             AppLog.e(LogCategory.RUNTIME, "Bootstrap install failed: ${e.message} — ${e.stackTraceToString()}")
             emit(BootstrapState.Failed(e.message ?: "Unknown bootstrap failure", e))
         } catch (e: Exception) {
             AppLog.e(LogCategory.RUNTIME, "Bootstrap install failed unexpectedly — ${e.stackTraceToString()}")
             emit(BootstrapState.Failed("Unexpected error: ${e.message}", e))
+        } finally {
+            if (replaced && !success) {
+                check(SafeFiles.deleteTree(env.prefixDir)) { "Could not roll back failed runtime setup" }
+                Files.move(backup.toPath(), env.prefixDir.toPath())
+            }
+            SafeFiles.deleteTree(staged)
         }
+      }
     }.flowOn(Dispatchers.IO)
 
-    private suspend inline fun downloadWithProgress(
-        url: String,
-        destination: File,
-        expectedSize: Long,
-        crossinline onProgress: suspend (downloaded: Long, total: Long) -> Unit,
-    ) {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = 15_000
-            readTimeout = 30_000
-        }
-        try {
-            val code = connection.responseCode
-            if (code !in 200..299) throw BootstrapException("Download failed with HTTP $code for $url")
-            val total = connection.contentLengthLong.takeIf { it > 0 } ?: expectedSize
-
-            val digest = MessageDigest.getInstance("SHA-256")
-            connection.inputStream.use { input ->
-                FileOutputStream(destination).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var downloaded = 0L
-                    var lastEmit = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        output.write(buffer, 0, read)
-                        digest.update(buffer, 0, read)
-                        downloaded += read
-                        // Throttle progress emission so we don't flood the Flow for a 30MB download.
-                        if (downloaded - lastEmit > 512 * 1024 || downloaded == total) {
-                            onProgress(downloaded, total)
-                            lastEmit = downloaded
-                        }
-                    }
-                }
-            }
-            AppLog.d(LogCategory.RUNTIME, "Downloaded $url — sha256=${digest.digest().joinToString("") { "%02x".format(it) }}")
-        } finally {
-            connection.disconnect()
-        }
-    }
-
-    private suspend inline fun extractBootstrap(zipFile: File, crossinline onProgress: suspend (extracted: Int, total: Int) -> Unit) {
+    private suspend inline fun extractBootstrap(zipFile: File, destination: File, crossinline onProgress: suspend (extracted: Int, total: Int) -> Unit) {
         val symlinkLines = mutableListOf<String>()
         // First pass: count entries so progress is meaningful (zip files don't expose a cheap
         // total-entry count while streaming, so we do a lightweight scan first).
@@ -158,14 +175,17 @@ class BootstrapManager(private val context: Context) {
             while (entry != null) {
                 val name = entry.name
                 if (entry.isDirectory) {
-                    File(env.prefixDir, name).mkdirs()
+                    ArchivePaths.resolve(destination, name).mkdirs()
                 } else if (name == "SYMLINKS.txt") {
                     symlinkLines += zis.bufferedReader(Charsets.UTF_8).readText().lines()
                 } else {
-                    val outFile = File(env.prefixDir, name)
+                    val outFile = ArchivePaths.resolve(destination, name)
                     outFile.parentFile?.mkdirs()
                     outFile.outputStream().use { out -> zis.copyTo(out) }
-                    if (name.startsWith("bin/") || name.startsWith("libexec/") ||
+                    val magic = outFile.inputStream().use { it.readNBytes(4) }
+                    val executable = magic.contentEquals(byteArrayOf(0x7f, 0x45, 0x4c, 0x46)) ||
+                        (magic.size >= 2 && magic[0] == '#'.code.toByte() && magic[1] == '!'.code.toByte())
+                    if (executable || name.startsWith("bin/") || name.startsWith("libexec/") ||
                         name.startsWith("lib/") && (name.endsWith(".so") || name.contains(".so."))
                     ) {
                         outFile.setExecutable(true, false)
@@ -186,13 +206,17 @@ class BootstrapManager(private val context: Context) {
             if (line.isBlank() || !line.contains(symlinkSeparator)) continue
             val (target, rawLinkPath) = line.split(symlinkSeparator, limit = 2)
             val linkPath = rawLinkPath.removePrefix("./")
-            val linkFile = File(env.prefixDir, linkPath)
+            val linkFile = ArchivePaths.link(destination, linkPath)
             linkFile.parentFile?.mkdirs()
             try {
                 if (linkFile.exists() || java.nio.file.Files.isSymbolicLink(linkFile.toPath())) {
                     linkFile.delete()
                 }
-                java.nio.file.Files.createSymbolicLink(linkFile.toPath(), java.io.File(target).toPath())
+                val relativeTarget = if (target.startsWith(TermuxEnvironment.GUEST_PREFIX + "/")) {
+                    val actualTarget = ArchivePaths.link(destination, target.removePrefix(TermuxEnvironment.GUEST_PREFIX + "/"))
+                    linkFile.parentFile.toPath().relativize(actualTarget.toPath())
+                } else java.io.File(target).toPath()
+                java.nio.file.Files.createSymbolicLink(linkFile.toPath(), relativeTarget)
                 symlinksCreated++
             } catch (e: java.io.IOException) {
                 AppLog.w(LogCategory.RUNTIME, "Failed to create symlink $linkPath -> $target: ${e.message}")
@@ -202,8 +226,10 @@ class BootstrapManager(private val context: Context) {
     }
 
     fun uninstall(): Boolean {
-        val result = env.prefixDir.deleteRecursively() and env.homeDir.deleteRecursively()
+        val result = SafeFiles.deleteTree(env.prefixDir) and SafeFiles.deleteTree(env.homeDir)
         AppLog.i(LogCategory.RUNTIME, "Bootstrap uninstalled: $result")
         return result
     }
+
+    companion object { private val installMutex = Mutex() }
 }

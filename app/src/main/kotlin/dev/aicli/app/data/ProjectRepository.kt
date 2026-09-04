@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.io.File
 import java.util.UUID
+import dev.aicli.core.filesystem.ExternalFolderStorage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** Bridges `core.db`'s persisted rows and `core.filesystem`'s domain model. */
 class ProjectRepository(private val context: Context) {
@@ -16,9 +19,10 @@ class ProjectRepository(private val context: Context) {
 
     val projects: Flow<List<Project>> = dao.observeAll().map { rows -> rows.map { it.toDomain() } }
 
-    suspend fun createAppWorkspace(name: String): Project {
+    suspend fun createAppWorkspace(name: String): Project = withContext(Dispatchers.IO) {
+        require(name.isNotBlank()) { "Project name cannot be empty" }
         val id = UUID.randomUUID().toString()
-        val dir = File(context.filesDir, "workspaces/$id").apply { mkdirs() }
+        val dir = File(context.filesDir, "workspaces/$id").apply { check(mkdirs()) { "Could not create project directory" } }
         val project = Project(
             id = id,
             name = name,
@@ -27,21 +31,27 @@ class ProjectRepository(private val context: Context) {
             lastOpenedAtEpochMillis = null,
         )
         dao.upsert(project.toEntity())
-        return project
+        project
     }
 
-    suspend fun registerExternalProject(name: String, treeUri: android.net.Uri): Project {
+    suspend fun registerExternalProject(name: String, treeUri: android.net.Uri): Project = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val staging = File(context.filesDir, "staging/$id").apply { mkdirs() }
+        val displayName = ExternalFolderStorage(context).importFolder(id, treeUri, staging)
         val project = Project(
             id = id,
-            name = name,
-            root = WorkspaceRoot.ExternalProject(id = id, displayName = name, treeUri = treeUri, stagingDirectory = staging),
+            name = displayName,
+            root = WorkspaceRoot.ExternalProject(id = id, displayName = displayName, treeUri = treeUri, stagingDirectory = staging),
             createdAtEpochMillis = System.currentTimeMillis(),
             lastOpenedAtEpochMillis = null,
         )
         dao.upsert(project.toEntity())
-        return project
+        project
+    }
+
+    suspend fun saveToFolder(id: String): Int {
+        val project = checkNotNull(get(id)) { "Project not found" }
+        return ExternalFolderStorage(context).exportChanges(project.root as WorkspaceRoot.ExternalProject)
     }
 
     suspend fun markOpened(projectId: String) {

@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 
 data class DiagnosticsUiData(val healthChecks: List<HealthCheckResult>, val providerStates: List<ProviderCard>)
 
@@ -20,13 +22,15 @@ class DiagnosticsViewModel(
     private val providers: List<AIProvider>,
     private val providerStateRepository: ProviderStateRepository,
 ) : ViewModel() {
+    private var checkJob: Job? = null
     private val _state = MutableStateFlow<UiState<DiagnosticsUiData>>(UiState.Loading)
     val state: StateFlow<UiState<DiagnosticsUiData>> = _state.asStateFlow()
 
     init { runDiagnostics() }
 
     fun runDiagnostics() {
-        viewModelScope.launch {
+        if (checkJob?.isActive == true) return
+        checkJob = viewModelScope.launch {
             _state.value = UiState.Loading
             try {
                 val health = healthChecker.runAll()
@@ -34,6 +38,7 @@ class DiagnosticsViewModel(
                 val states = providerStateRepository.states.value
                 val providerCards = providers.map { ProviderCard(it, states.getValue(it.id)) }
                 _state.value = UiState.Success(DiagnosticsUiData(health, providerCards))
+            } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 _state.value = UiState.Error(e.message ?: "Diagnostics failed", e)
             }

@@ -25,27 +25,29 @@ data class LogEntry(
  * should call android.util.Log directly, so a security or privacy review has one place to look.
  */
 object AppLog {
+    @Volatile var debugEnabled: Boolean = false
     private const val MAX_ENTRIES = 4000
     private val buffer = ConcurrentLinkedDeque<LogEntry>()
     private val _events = MutableSharedFlow<LogEntry>(extraBufferCapacity = 64)
     val events: SharedFlow<LogEntry> = _events.asSharedFlow()
 
     private val redactPatterns = listOf(
-        Regex("(?i)(api[_-]?key|token|secret|password|authorization)\\s*[:=]\\s*\\S+"),
-        Regex("sk-[A-Za-z0-9]{10,}"),
+        Regex("(?i)Bearer\\s+[A-Za-z0-9._~-]+"),
+        Regex("(?i)([A-Za-z_]*api[_-]?key|[A-Za-z_]*token|secret|password|authorization)[\"']?\\s*[:=]\\s*[\"']?[^\\s,\"'}]+"),
+        Regex("sk-[A-Za-z0-9_-]{10,}"),
         Regex("ghp_[A-Za-z0-9]{20,}"),
-        Regex("Bearer\\s+[A-Za-z0-9._-]+"),
     )
 
     fun redact(message: String): String {
         var result = message
         for (pattern in redactPatterns) {
-            result = pattern.replace(result) { m -> m.value.substringBefore(':').substringBefore('=') + "=<redacted>" }
+            result = pattern.replace(result, "<redacted>")
         }
         return result
     }
 
     fun log(level: LogLevel, category: LogCategory, message: String) {
+        if (level == LogLevel.DEBUG && !debugEnabled) return
         val safe = redact(message)
         val entry = LogEntry(System.currentTimeMillis(), level, category, safe)
         buffer.addLast(entry)

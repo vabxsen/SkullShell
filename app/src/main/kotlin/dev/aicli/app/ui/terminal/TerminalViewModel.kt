@@ -16,14 +16,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import dev.aicli.core.settings.SettingsRepository
+import dev.aicli.core.settings.TerminalSettings
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 
 class TerminalViewModel(
     private val sessionManager: SessionManager,
     val providersById: Map<String, AIProvider>,
     private val termuxEnvironment: TermuxEnvironment,
     private val projectRepository: ProjectRepository,
+    settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
+    val terminalSettings = settingsRepository.terminalSettings.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TerminalSettings())
     val sessions = sessionManager.sessions
     private var resolvedFor: String? = null
 
@@ -34,22 +40,21 @@ class TerminalViewModel(
      * on every recomposition without spawning duplicate sessions.
      */
     fun resolveAndOpen(tag: String) {
-        if (resolvedFor == tag || sessions.value.isNotEmpty()) return
+        if (resolvedFor == tag) return
         resolvedFor = tag
         viewModelScope.launch {
             val (kind, id) = tag.split(":", limit = 2).let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
             when (kind) {
+                "resume" -> if (sessions.value.any { it.id == id }) selectSession(id) else openShell(defaultWorkspaceDir())
                 "project" -> {
                     val project = projectRepository.get(id)
+                    if (project != null) projectRepository.markOpened(project.id)
                     val workingDirectory = project?.root?.rootDirectory?.absolutePath ?: defaultWorkspaceDir()
                     openShell(workingDirectory, projectId = id)
                 }
                 "provider" -> launchProvider(id, defaultWorkspaceDir())
-                // "session" (no id): the nav-rail/bottom-nav Terminal destination. The
-                // sessions.value.isNotEmpty() guard above already makes this a no-op — and
-                // therefore a resume of whatever was last active — whenever a session exists;
-                // this branch only fires to open a first default shell when none does yet.
-                "session" -> openShell(defaultWorkspaceDir())
+
+                "session" -> if (sessions.value.isNotEmpty()) selectSession(sessions.value.last().id) else openShell(defaultWorkspaceDir())
                 else -> openShell(defaultWorkspaceDir())
             }
         }
@@ -82,20 +87,21 @@ class TerminalViewModel(
         viewModelScope.launch {
             if (!termuxEnvironment.isBootstrapInstalled) {
                 AppLog.w(LogCategory.TERMINAL, "Refusing to open shell: bootstrap not installed at ${termuxEnvironment.prefixDir}")
-                _launchError.value = "The Linux environment isn't installed yet — set it up from Settings > Repair runtime first."
+                _launchError.value = "Install the Linux environment in Settings under Set up or repair runtime."
                 return@launch
             }
             try {
                 val shellPath = File(termuxEnvironment.prefixDir, "bin/bash").takeIf { it.exists() }?.absolutePath
                     ?: File(termuxEnvironment.prefixDir, "bin/sh").absolutePath
                 val process = PtyProcess.spawn(
-                    command = termuxEnvironment.wrapForExec(listOf(shellPath)),
+                    command = termuxEnvironment.wrapForExec(listOf(shellPath), workingDirectory),
                     environment = termuxEnvironment.buildEnvironment(),
                     workingDirectory = workingDirectory,
                     initialCols = 100,
                     initialRows = 30,
                 )
                 val controller = sessionManager.createSession("Shell", null, projectId, workingDirectory, process, 100, 30)
+                _launchError.value = null
                 _activeSessionId.value = controller.meta.id
             } catch (e: Exception) {
                 AppLog.e(LogCategory.TERMINAL, "Failed to open shell: ${e.stackTraceToString()}")
@@ -114,6 +120,7 @@ class TerminalViewModel(
             try {
                 val process = provider.launch(ProviderLaunchRequest(workingDirectory = workingDirectory, initialCols = 100, initialRows = 30))
                 val controller = sessionManager.createSession(provider.displayName, providerId, projectId, workingDirectory, process, 100, 30)
+                _launchError.value = null
                 _activeSessionId.value = controller.meta.id
             } catch (e: Exception) {
                 AppLog.e(LogCategory.TERMINAL, "Failed to launch ${provider.id}: ${e.stackTraceToString()}")

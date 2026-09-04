@@ -19,6 +19,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
+
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.verticalScroll
 import dev.aicli.app.ui.design.GhostButton
 import dev.aicli.app.ui.design.Glyph
 import dev.aicli.app.ui.design.Glyphs
@@ -57,11 +61,6 @@ fun EmptyState(
     )
 }
 
-/**
- * Errors are stated, not shouted. In a monochrome design there is no red panel available and
- * none is wanted: the glyph plus a plain sentence carries it, and anything a human cannot act on
- * goes into [ExpandableDetails] instead of onto the screen.
- */
 @Composable
 fun ErrorState(
     title: String,
@@ -103,13 +102,13 @@ private fun StateBody(
     // phone screen reads as a rendering failure rather than as a deliberate message.
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = Metrics.gutter),
+            modifier = Modifier.widthIn(max = 380.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = Metrics.gutter, vertical = Space.x6),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Glyph(glyph, null, size = Metrics.glyphXl, tint = SkullTheme.colors.inkFaint)
+            IconTile(glyph, size = 80.dp)
             Text(
                 title,
-                style = SkullTheme.type.heading,
+                style = SkullTheme.type.title,
                 color = SkullTheme.colors.ink,
                 align = TextAlign.Center,
                 modifier = Modifier.padding(top = Space.x5),

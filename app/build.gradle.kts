@@ -76,7 +76,12 @@ android {
         compose = true
         buildConfig = true
     }
+    sourceSets["main"].assets.srcDir(rootProject.file("THIRD_PARTY_NOTICES"))
     packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += setOf("**/libskullshell_*.so")
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -103,6 +108,8 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.foundation)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons)
     implementation(libs.compose.animation)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.navigation.compose)
@@ -120,6 +127,7 @@ dependencies {
     testImplementation(libs.mockk)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation("androidx.documentfile:documentfile:1.0.1")
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)

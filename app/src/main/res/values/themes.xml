@@ -1,9 +1,4 @@
 <resources>
-    <!-- Compose owns all real UI theming (see ui/design/Theme.kt); this is only the launch/window
-         theme Android needs before the first Compose frame draws. It is always the dark scheme's
-         pure black. A user on the Light theme sees a one-frame flash of black system bars before
-         SkullTheme's SideEffect corrects the bar icon appearance - a single frame, not a
-         persistent mismatch. -->
     <style name="Theme.AiCli" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/window_background_dark</item>
         <item name="android:statusBarColor">@color/window_background_dark</item>

@@ -1,6 +1,7 @@
 package dev.aicli.provider.claude
 
 import android.content.Context
+import dev.aicli.core.filesystem.SafeFiles
 import dev.aicli.core.logging.AppLog
 import dev.aicli.core.logging.LogCategory
 import dev.aicli.core.networking.NpmRegistryResolver
@@ -17,16 +18,17 @@ import dev.aicli.runtime.foreignlibc.ForeignLibcRuntime
 import dev.aicli.runtime.foreignlibc.ForeignLibcState
 import dev.aicli.runtime.foreignlibc.LibcFlavor
 import dev.aicli.terminal.PtyProcess
+import dev.aicli.terminal.runPtyCommand
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
-import java.util.zip.GZIPInputStream
+import dev.aicli.runtime.archive.installExecutable
+import dev.aicli.core.networking.downloadFile
+import dev.aicli.core.networking.ReleaseVersion
 
 /**
  * Claude Code. Verified directly (not assumed) against the real npm tarball for
@@ -86,7 +88,7 @@ class ClaudeProvider(private val context: Context) : AIProvider {
         return when (auth.currentState()) {
             AuthState.SignedIn -> ProviderState.Ready(version)
             AuthState.SignedOut, AuthState.Unknown -> ProviderState.AuthRequired
-            is AuthState.Error -> ProviderState.Ready(version)
+            is AuthState.Error -> ProviderState.Installed(version)
         }
     }
 
@@ -95,23 +97,20 @@ class ClaudeProvider(private val context: Context) : AIProvider {
         return PtyProcess.spawn(wrapped, env.buildEnvironment(), request.workingDirectory, request.initialCols, request.initialRows)
     }
 
-    private suspend fun runVersionCommand(): String? = withContext(Dispatchers.IO) {
-        try {
-            val wrapped = foreignLibc.wrapCommand(LibcFlavor.MUSL, listOf(binary.absolutePath, "--version"), env.homeDir.absolutePath)
-            val process = PtyProcess.spawn(wrapped, env.buildEnvironment(), env.homeDir.absolutePath, 80, 24)
-            val output = StringBuilder()
-            val job = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-                process.outputFlow.collect { output.append(String(it, Charsets.UTF_8)) }
-            }
-            process.waitForExit()
-            job.cancel()
-            output.toString().trim().lineSequence().firstOrNull { it.isNotBlank() }
+    private suspend fun runVersionCommand(): String? {
+        return try {
+            val result = runPtyCommand(foreignLibc.wrapCommand(LibcFlavor.MUSL, listOf(binary.absolutePath, "--version"), env.homeDir.absolutePath), env.buildEnvironment(), env.homeDir.absolutePath)
+            if (result.exitCode != 0) {
+                AppLog.w(LogCategory.PROVIDER, "Version check failed (exit ${result.exitCode}): ${result.output.take(500)}")
+                null
+            } else Regex("\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?").find(result.output)?.value
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            AppLog.w(LogCategory.PROVIDER, "claude --version failed: ${e.message}")
+            AppLog.w(LogCategory.PROVIDER, "Version check failed: ${e.message}")
             null
         }
     }
-
     private inner class ClaudeInstaller : ProviderInstaller {
         override fun install(): Flow<InstallEvent> = flow {
             try {
@@ -151,29 +150,21 @@ class ClaudeProvider(private val context: Context) : AIProvider {
 
                 emit(InstallEvent.Progress("Downloading claude-code ${version.version}", 0.55f))
                 val tarball = File(context.cacheDir, "claude-code-${version.version}.tgz")
-                downloadTo(version.dist.tarball, tarball)
+                downloadFile(version.dist.tarball, tarball, expectedDigest = version.dist.shasum?.let { "sha1:$it" })
 
                 emit(InstallEvent.Progress("Extracting", 0.85f))
                 installDir.mkdirs()
-                extractTarGz(tarball, installDir) // npm tarballs are rooted at "package/"
-                tarball.delete()
-
-                val extractedBinary = File(installDir, "package/claude")
-                if (!extractedBinary.exists()) {
-                    emit(InstallEvent.Failed("extract", "No 'claude' binary found inside the $pkg tarball after extraction"))
-                    return@flow
-                }
-                extractedBinary.setExecutable(true, false)
-                if (binary.exists() || java.nio.file.Files.isSymbolicLink(binary.toPath())) binary.delete()
-                java.nio.file.Files.createSymbolicLink(binary.toPath(), extractedBinary.toPath())
-
-                emit(InstallEvent.Progress("Verifying installation", 0.97f))
-                if (runVersionCommand() == null) {
-                    emit(InstallEvent.Failed("verify", "claude was installed but --version did not succeed"))
-                    return@flow
+                installExecutable(tarball, binary, setOf("claude")) { staged ->
+                    emit(InstallEvent.Progress("Verifying installation", 0.97f))
+                    val output = runPtyCommand(foreignLibc.wrapCommand(LibcFlavor.MUSL,
+                        listOf(staged.absolutePath, "--version"), env.homeDir.absolutePath),
+                        env.buildEnvironment(), env.homeDir.absolutePath).requireSuccess()
+                    check(Regex("\\d+\\.\\d+\\.\\d+").containsMatchIn(output)) { "Claude did not report a version" }
                 }
                 AppLog.i(LogCategory.INSTALLER, "Claude Code installed: ${version.version}")
                 emit(InstallEvent.Completed)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 AppLog.e(LogCategory.INSTALLER, "Claude Code install failed: ${e.message}")
                 emit(InstallEvent.Failed("unexpected", e.message ?: "Unknown error", e))
@@ -181,7 +172,7 @@ class ClaudeProvider(private val context: Context) : AIProvider {
         }.flowOn(Dispatchers.IO)
 
         override fun uninstall(): Flow<InstallEvent> = flow {
-            installDir.deleteRecursively()
+            check(SafeFiles.deleteTree(installDir)) { "Could not remove agent files" }
             emit(InstallEvent.Completed)
         }.flowOn(Dispatchers.IO)
 
@@ -189,101 +180,35 @@ class ClaudeProvider(private val context: Context) : AIProvider {
             val pkg = npmPlatformPackage() ?: return@withContext null
             val currentVersion = runVersionCommand() ?: return@withContext null
             val latest = NpmRegistryResolver.latestVersion(pkg).getOrNull() ?: return@withContext null
-            if (latest.version.isNotBlank() && !currentVersion.contains(latest.version)) {
+            if (ReleaseVersion.isNewer(latest.version, currentVersion)) {
                 ProviderState.UpdateAvailable(currentVersion, latest.version)
             } else null
         }
     }
 
-    /**
-     * Claude Code manages its own auth state (Pro/Max/Console-key login) internally and doesn't
-     * publish a documented "check if logged in" flag. Rather than guess at an undocumented
-     * credential file format and risk a false SignedOut, this checks only for the *presence* of a
-     * non-empty credentials file under `~/.claude` — if that layout ever changes upstream, this
-     * degrades to [AuthState.Unknown], never to a false positive. The authoritative signal is
-     * always the real CLI session: launching `claude` shows its own login prompt when needed,
-     * exactly like on desktop — we don't intercept or fake that.
-     */
+    /** Authentication status comes from the official CLI, not configuration-file existence. */
     private inner class ClaudeAuth : ProviderAuth {
-        private val candidateCredentialFiles: List<File>
-            get() = listOf(File(env.homeDir, ".claude/.credentials.json"), File(env.homeDir, ".claude.json"))
+        private suspend fun authCommand(action: String) = runPtyCommand(
+            foreignLibc.wrapCommand(LibcFlavor.MUSL, listOf(binary.absolutePath, "auth", action), env.homeDir.absolutePath),
+            env.buildEnvironment(), env.homeDir.absolutePath,
+        )
 
-        override suspend fun currentState(): AuthState = withContext(Dispatchers.IO) {
-            when {
-                !binary.exists() -> AuthState.Unknown
-                System.getenv("ANTHROPIC_API_KEY") != null -> AuthState.SignedIn
-                candidateCredentialFiles.any { it.exists() && it.length() > 0 } -> AuthState.SignedIn
-                candidateCredentialFiles.any { it.parentFile?.exists() == true } -> AuthState.SignedOut
-                else -> AuthState.Unknown
-            }
-        }
-
-        /** Claude Code's own `/login` flow runs inside the CLI itself once launched, not a separate subcommand. */
-        override suspend fun startLogin(): PtyProcess {
-            val wrapped = foreignLibc.wrapCommand(LibcFlavor.MUSL, listOf(binary.absolutePath), env.homeDir.absolutePath)
-            return PtyProcess.spawn(wrapped, env.buildEnvironment(), env.homeDir.absolutePath, 100, 30)
-        }
-
-        override suspend fun logout() = withContext(Dispatchers.IO) {
-            candidateCredentialFiles.forEach { it.delete() }
-        }
-    }
-}
-
-private fun downloadTo(url: String, destination: File) {
-    val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-        instanceFollowRedirects = true
-        connectTimeout = 15_000
-        readTimeout = 30_000
-    }
-    try {
-        val code = connection.responseCode
-        if (code !in 200..299) error("Download failed with HTTP $code for $url")
-        connection.inputStream.use { input -> destination.outputStream().use { output -> input.copyTo(output) } }
-    } finally {
-        connection.disconnect()
-    }
-}
-
-private fun extractTarGz(tarGz: File, destDir: File) {
-    GZIPInputStream(tarGz.inputStream().buffered()).use { gzip ->
-        val header = ByteArray(512)
-        while (true) {
-            var total = 0
-            while (total < 512) {
-                val n = gzip.read(header, total, 512 - total)
-                if (n == -1) break
-                total += n
-            }
-            if (total < 512 || header.all { it == 0.toByte() }) break
-
-            val name = cString(header, 0, 100)
-            if (name.isBlank()) break
-            val sizeOctal = cString(header, 124, 12).trim()
-            val size = if (sizeOctal.isBlank()) 0L else sizeOctal.toLong(8)
-            val typeFlag = header[156].toInt().toChar()
-
-            val target = File(destDir, name)
-            if (typeFlag == '5') {
-                target.mkdirs()
-            } else if (size > 0) {
-                target.parentFile?.mkdirs()
-                val content = ByteArray(size.toInt())
-                var read = 0
-                while (read < content.size) {
-                    val n = gzip.read(content, read, content.size - read)
-                    if (n == -1) break
-                    read += n
+        override suspend fun currentState(): AuthState {
+            if (!binary.exists()) return AuthState.Unknown
+            return when (val result = authCommand("status")) {
+                else -> when (result.exitCode) {
+                    0 -> AuthState.SignedIn
+                    1 -> AuthState.SignedOut
+                    else -> AuthState.Error("Could not check Claude authentication (exit ${result.exitCode})")
                 }
-                target.outputStream().use { it.write(content) }
-                val padding = (512 - (size % 512)) % 512
-                if (padding > 0) gzip.skip(padding)
             }
         }
-    }
-}
 
-private fun cString(bytes: ByteArray, offset: Int, length: Int): String {
-    val end = (offset until offset + length).firstOrNull { bytes[it] == 0.toByte() } ?: (offset + length)
-    return String(bytes, offset, end - offset, Charsets.US_ASCII)
+        override suspend fun startLogin(): PtyProcess = PtyProcess.spawn(
+            foreignLibc.wrapCommand(LibcFlavor.MUSL, listOf(binary.absolutePath, "auth", "login"), env.homeDir.absolutePath),
+            env.buildEnvironment(), env.homeDir.absolutePath, 100, 30,
+        )
+
+        override suspend fun logout() { authCommand("logout").requireSuccess() }
+    }
 }

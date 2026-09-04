@@ -4,142 +4,129 @@ import android.content.Context
 import android.os.Build
 import java.io.File
 
-/**
- * Resolves the on-device layout of the Linux userland this app manages, and builds the
- * environment every spawned process (package-manager commands, and ultimately the CLIs
- * themselves) must run with.
- *
- * The layout intentionally mirrors Termux's own `$PREFIX` convention
- * (`/data/data/com.termux/files/usr` for the real Termux app) so that Termux's bootstrap
- * archive and its package repository's binaries — which hardcode this shape into RPATHs,
- * shebangs, and `dpkg` metadata — work unmodified once extracted into *our* app's private
- * storage instead of theirs. See ARCHITECTURE.md §2.
- */
+/** Termux packages retain their compiled prefix inside a PRoot process owned by this app. */
 class TermuxEnvironment(context: Context) {
+    private val connectivity = context.getSystemService(android.net.ConnectivityManager::class.java)
     private val filesDir = context.filesDir
+    private val nativeDir = File(context.applicationInfo.nativeLibraryDir)
+    private val cacheDir = context.cacheDir
+    val prefixDir = File(filesDir, "usr")
+    val homeDir = File(filesDir, "home")
+    val tmpDir = File(prefixDir, "tmp")
+    val prootBinary = File(nativeDir, "libskullshell_proot.so")
+    val prootLoader = File(nativeDir, "libskullshell_loader.so")
 
-    /** Root of the extracted bootstrap, analogous to Termux's `$PREFIX`. */
-    val prefixDir: File = File(filesDir, "usr")
-
-    /** Analogous to Termux's `$HOME`; where CLI config/state/dotfiles live, not project code. */
-    val homeDir: File = File(filesDir, "home")
-
-    val tmpDir: File = File(prefixDir, "tmp")
-
-    /**
-     * The device ABI we install a bootstrap for. Termux publishes bootstrap-{aarch64,arm,i686,x86_64}.zip.
-     *
-     * Verified on a real device (x86_64 emulator, `ro.product.cpu.abilist=x86_64,arm64-v8a`,
-     * `ro.enable.native.bridge.exec=1`): [Build.SUPPORTED_ABIS] listing `arm64-v8a` here reflects
-     * this device's ability to run *APK-bundled native libraries* through Android's own
-     * PackageManager-managed native-bridge translation (ndk_translation) — it does **not** mean a
-     * standalone ELF binary handed to a raw `execve()` gets transparently translated. Trusting
-     * SUPPORTED_ABIS here (as an earlier version of this code did) resolves `bootstrap-aarch64.zip`
-     * on this x86_64 device, and the *system's own* `/system/bin/linker64` then refuses to load it
-     * ("is for EM_AARCH64 instead of EM_X86_64") — confirmed by direct testing. `System.getProperty
-     * ("os.arch")` reflects the ART runtime's actual native architecture — the one anything we
-     * directly exec() actually runs as — and is what a plain process spawn needs, not what an APK's
-     * bundled .so can be translated from.
-     */
     val termuxAbi: String by lazy {
-        val osArch = System.getProperty("os.arch")
-        when (osArch) {
+        when (System.getProperty("os.arch")) {
             "aarch64" -> "aarch64"
             "x86_64", "amd64" -> "x86_64"
             "armv7l", "arm" -> "arm"
             "x86", "i686" -> "i686"
-            else -> {
-                // Unrecognized os.arch string: fall back to SUPPORTED_ABIS, best-effort.
-                val supported = Build.SUPPORTED_ABIS.toList()
-                when {
-                    "x86_64" in supported -> "x86_64"
-                    "arm64-v8a" in supported -> "aarch64"
-                    "armeabi-v7a" in supported -> "arm"
-                    "x86" in supported -> "i686"
-                    else -> error("No supported ABI matches a known Termux bootstrap: os.arch='$osArch', SUPPORTED_ABIS=$supported")
-                }
-            }
+            else -> error("Unsupported native architecture: ${System.getProperty("os.arch")} (${Build.SUPPORTED_ABIS.joinToString()})")
         }
     }
 
     fun ensureDirectoriesExist() {
-        prefixDir.mkdirs()
-        homeDir.mkdirs()
-        tmpDir.mkdirs()
+        check(prefixDir.isDirectory || prefixDir.mkdirs()) { "Could not create runtime directory" }
+        check(homeDir.isDirectory || homeDir.mkdirs()) { "Could not create home directory" }
+        check(tmpDir.isDirectory || tmpDir.mkdirs()) { "Could not create temporary directory" }
+        File(cacheDir, "apt/archives/partial").mkdirs()
     }
 
     val isBootstrapInstalled: Boolean
-        get() = File(prefixDir, "bin/bash").exists() || File(prefixDir, "bin/sh").exists()
+        get() = File(prefixDir, ".skullshell-ready").exists() && File(prefixDir, "bin/bash").exists() && prootLoader.exists()
+    val termuxExecPreloadLib: File get() = File(prefixDir, "lib/libtermux-exec-ld-preload.so")
+    val hasTermuxExec: Boolean get() = prootBinary.exists() && prootLoader.exists()
 
-    val termuxExecPreloadLib: File
-        get() = File(prefixDir, "lib/libtermux-exec-ld-preload.so")
-
-    val hasTermuxExec: Boolean
-        get() = termuxExecPreloadLib.exists()
-
-    /**
-     * Full replacement environment for a process running inside the bootstrap. This is never
-     * merged with the Zygote/app process's own environment — CLIs must see a clean, Linux-shaped
-     * environment, not Android's app-process env vars.
-     *
-     * [LD_PRELOAD] is set to termux-exec's shim whenever it's installed (see ARCHITECTURE.md
-     * §2a) — without it, exec of any bootstrap binary fails on API 29+ with EACCES. It is
-     * intentionally *not* set before termux-exec itself is installed (first-run bootstrap
-     * extraction has to happen through a different path — see [BootstrapManager]).
-     */
+    /** Host-side dependencies for PRoot; the guest's env command removes the host preload. */
     fun buildEnvironment(extra: Map<String, String> = emptyMap()): Map<String, String> {
-        val path = listOf(
-            "${prefixDir.absolutePath}/bin",
-            "${prefixDir.absolutePath}/bin/applets",
-        ).joinToString(":")
+      refreshDns()
+      return mapOf(
+        "HOME" to homeDir.absolutePath,
+        "PREFIX" to GUEST_PREFIX,
+        "TMPDIR" to tmpDir.absolutePath,
+        "PATH" to "$GUEST_PREFIX/bin:/system/bin",
+        "LD_LIBRARY_PATH" to "${nativeDir.absolutePath}:${prefixDir.absolutePath}/lib",
+        "LD_PRELOAD" to File(nativeDir, "libtalloc.so").absolutePath,
+        "PROOT_LOADER" to prootLoader.absolutePath,
+        "PROOT_TMP_DIR" to tmpDir.absolutePath,
+        "LANG" to "en_US.UTF-8",
+        "TERM" to "xterm-256color",
+        "COLORTERM" to "truecolor",
+        "SSL_CERT_FILE" to "$GUEST_PREFIX/etc/tls/cert.pem",
+        "npm_config_cache" to "${homeDir.absolutePath}/.npm-cache",
+      ) + extra
+    }
 
-        val base = mutableMapOf(
-            "PREFIX" to prefixDir.absolutePath,
-            "HOME" to homeDir.absolutePath,
-            "TMPDIR" to tmpDir.absolutePath,
-            "PATH" to path,
-            "LD_LIBRARY_PATH" to "${prefixDir.absolutePath}/lib",
-            "LANG" to "en_US.UTF-8",
-            "TERM" to "xterm-256color",
-            "COLORTERM" to "truecolor",
-            "SSL_CERT_FILE" to "${prefixDir.absolutePath}/etc/tls/cert.pem",
-            "npm_config_cache" to "${homeDir.absolutePath}/.npm-cache",
-        )
-        if (hasTermuxExec) {
-            base["LD_PRELOAD"] = termuxExecPreloadLib.absolutePath
+    fun refreshDns(rootfs: File? = null) {
+        val servers = connectivity.getLinkProperties(connectivity.activeNetwork)?.dnsServers.orEmpty()
+        if (servers.isEmpty()) return
+        val config = servers.joinToString("\n", postfix = "\n") { "nameserver ${it.hostAddress}" }
+        val destination = if (rootfs == null) File(prefixDir, "etc/resolv.conf") else File(rootfs, "etc/resolv.conf")
+        destination.parentFile?.mkdirs()
+        if (!destination.exists() || destination.readText() != config) destination.writeText(config)
+    }
+
+    fun wrapForExec(command: List<String>, workingDirectory: String = homeDir.absolutePath): List<String> =
+        prootCommand(command, workingDirectory)
+
+    fun prootCommand(
+        command: List<String>,
+        workingDirectory: String,
+        rootfs: File? = null,
+        extraBindings: Map<String, String> = emptyMap(),
+        emulateRoot: Boolean = false,
+    ): List<String> {
+        require(command.isNotEmpty())
+        check(prootBinary.exists() && prootLoader.exists()) { "Runtime support is missing for this device architecture" }
+        val args = mutableListOf(systemLinkerPath(), prootBinary.absolutePath, "--kill-on-exit")
+        if (emulateRoot) args += "-0"
+        if (rootfs != null) {
+            refreshDns(rootfs)
+            args += listOf("-r", rootfs.absolutePath)
+            for (path in listOf("/system", "/apex", "/dev", "/proc", nativeDir.absolutePath)) args += listOf("-b", path)
+            val data = filesDir.parentFile!!
+            for (alias in setOf(data.absolutePath, data.canonicalPath)) args += listOf("-b", "${data.absolutePath}:$alias")
+            val wrappers = nativeToolWrappers(rootfs)
+            for (shell in listOf("sh", "bash")) {
+                val wrapper = File(wrappers, shell)
+                if (wrapper.isFile) args += listOf("-b", "${wrapper.absolutePath}:/bin/$shell!")
+            }
         }
-        base.putAll(extra)
-        return base
+        args += listOf("-b", "${filesDir.parentFile!!.absolutePath}:/data/data/com.termux")
+        if (rootfs == null) {
+            // Static Linux binaries use the conventional resolver/CA locations, not Bionic's
+            // network APIs or Termux's compiled configuration paths.
+            for ((source, target) in listOf("etc/resolv.conf" to "/etc/resolv.conf", "etc/tls/cert.pem" to "/etc/ssl/cert.pem")) {
+                val file = File(prefixDir, source)
+                if (file.isFile) args += listOf("-b", "${file.absolutePath}:$target")
+            }
+        }
+        for ((host, guest) in extraBindings) args += listOf("-b", "$host:$guest")
+        args += listOf("-w", workingDirectory, "/system/bin/env", "-u", "LD_PRELOAD", "-u", "LD_LIBRARY_PATH")
+        if (rootfs != null) args += listOf("PATH=/usr/local/bin:/usr/bin:/bin:$GUEST_PREFIX/bin:/system/bin", "SHELL=/bin/bash")
+        else args += "LD_LIBRARY_PATH=$GUEST_PREFIX/lib"
+        args += command
+        return args
     }
 
-    /**
-     * Wraps [command] so its *first* exec actually succeeds on API 29+, then relies on
-     * [buildEnvironment]'s `LD_PRELOAD` to carry termux-exec's interception into every process
-     * that binary itself subsequently forks — see ARCHITECTURE.md §2a for the full story.
-     *
-     * Confirmed by direct on-device testing (`adb shell run-as ... `, permissive=0): Android's
-     * SELinux policy denies `execute_no_trans` for any `app_data_file`-labeled file execed
-     * directly by an `untrusted_app` process — this is not a config quirk, it applies to *every*
-     * binary in the bootstrap, every time, with no per-app opt-out. `LD_PRELOAD` alone cannot
-     * prevent this: it only affects a process's own libc symbol resolution *after* it starts, and
-     * this denial happens at the kernel during the `execve()` syscall itself, before any new
-     * process image (or its LD_PRELOAD) exists. termux-exec's actual fix (confirmed against its
-     * own `system_linker_exec` naming) is to route the very first exec of a process tree through
-     * `/system/bin/linker64` (a `system_file`-labeled, SELinux-trusted binary) instead of the
-     * kernel execve()-ing the target file directly — the linker then manually loads and maps the
-     * real target's ELF segments itself. This still respects `LD_PRELOAD` in the target's own
-     * envp during that manual load, so once this first process is running, its *own* subsequent
-     * execve() calls (e.g. bash forking `ls`) are caught by the now-loaded termux-exec shim
-     * without this app needing to wrap every single spawn — only the outermost one per session.
-     */
-    fun wrapForExec(command: List<String>): List<String> {
-        require(command.isNotEmpty()) { "command must have at least the target binary" }
-        val linker = systemLinkerPath()
-        return listOf(linker) + command
+    private fun nativeToolWrappers(rootfs: File): File {
+        val directory = File(rootfs, "usr/local/bin").apply { mkdirs() }
+        // Keep Bionic tool dependencies out of the musl/glibc loader's search path.
+        // The Android-built shells also use process syscalls supported by the host kernel.
+        for (name in listOf("sh", "bash", "git", "node", "npm", "npx", "rg", "ssh", "python", "python3")) {
+            if (!File(prefixDir, "bin/$name").isFile) continue
+            val script = "#!/system/bin/sh\nexec /system/bin/env LD_LIBRARY_PATH=$GUEST_PREFIX/lib $GUEST_PREFIX/bin/$name \"\$@\"\n"
+            val wrapper = File(directory, name)
+            if (!wrapper.exists() || wrapper.readText() != script) {
+                wrapper.writeText(script)
+                check(wrapper.setExecutable(true, true))
+            }
+        }
+        return directory
     }
 
-    private fun systemLinkerPath(): String = when (termuxAbi) {
-        "aarch64", "x86_64" -> "/system/bin/linker64"
-        else -> "/system/bin/linker"
-    }
+    private fun systemLinkerPath() = if (termuxAbi in listOf("aarch64", "x86_64")) "/system/bin/linker64" else "/system/bin/linker"
+
+    companion object { const val GUEST_PREFIX = "/data/data/com.termux/files/usr" }
 }

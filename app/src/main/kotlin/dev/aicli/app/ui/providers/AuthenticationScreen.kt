@@ -1,6 +1,12 @@
 package dev.aicli.app.ui.providers
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.ui.draw.clip
+import dev.aicli.app.ui.design.Shapes
+import dev.aicli.app.ui.design.DarkInk
+
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
@@ -77,12 +84,26 @@ fun AuthenticationScreen(
 @Composable
 private fun InProgressBody(providerName: String, sessionId: String?, viewModel: AuthenticationViewModel) {
     val controller = sessionId?.let { viewModel.controllerFor(it) }
-    Column(Modifier.fillMaxSize()) {
+    val links by viewModel.links.collectAsStateWithLifecycle()
+    val uriHandler = LocalUriHandler.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Column(Modifier.fillMaxSize().imePadding()) {
         PageTitle(
-            title = "Sign in",
-            subtitle = "Connect your " + providerName + " account. Follow the instructions below - a URL or code may appear.",
+            title = "Sign in to " + providerName,
+            subtitle = "Follow the terminal instructions to complete sign-in.",
             modifier = Modifier.padding(horizontal = Metrics.gutter, vertical = Space.x6),
         )
+        links.forEach { link ->
+            val host = android.net.Uri.parse(link).host.orEmpty()
+            dev.aicli.app.ui.design.GhostButton("Open $host", {
+                runCatching { uriHandler.openUri(link) }.onFailure {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(link))
+                    android.widget.Toast.makeText(context, "Link copied. Open it in your browser.", android.widget.Toast.LENGTH_LONG).show()
+                }
+            },
+                modifier = Modifier.padding(horizontal = Metrics.gutter))
+        }
         if (controller == null) {
             LoadingBody(Modifier.fillMaxSize())
         } else {
@@ -91,14 +112,15 @@ private fun InProgressBody(providerName: String, sessionId: String?, viewModel: 
                     .fillMaxWidth()
                     .weight(1f)
                     .padding(horizontal = Metrics.gutter, vertical = Space.x4)
-                    .border(Metrics.hairline, SkullTheme.colors.line),
+                    .clip(Shapes.panel)
+                    .border(Metrics.hairline, SkullTheme.colors.line, Shapes.panel),
             ) {
                 TerminalView(
                     buffer = controller.buffer,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     contentPadding = Space.x2,
-                    backgroundColor = SkullTheme.colors.bg.toArgb(),
-                    defaultForeground = SkullTheme.colors.ink.toArgb(),
+                    backgroundColor = DarkInk.bg.toArgb(),
+                    defaultForeground = DarkInk.ink.toArgb(),
                     onInput = { bytes -> controller.sendInput(bytes) },
                     onSizeChanged = { cols, rows -> controller.resize(cols, rows) },
                 )
@@ -118,7 +140,7 @@ private fun SignedInBody(providerName: String, onDone: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Glyph(Glyphs.CheckCircle, null, size = Metrics.glyphXl, tint = SkullTheme.colors.ink)
+        Glyph(Glyphs.CheckCircle, null, tint = SkullTheme.colors.success, size = 28.dp)
         Label(
             "Authenticated",
             color = SkullTheme.colors.ink,

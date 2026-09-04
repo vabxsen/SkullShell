@@ -7,6 +7,7 @@ import dev.aicli.core.logging.LogCategory
 import dev.aicli.core.networking.NetworkMonitor
 import dev.aicli.runtime.bootstrap.TermuxEnvironment
 import dev.aicli.terminal.PtyProcess
+import dev.aicli.terminal.runPtyCommand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -62,7 +63,7 @@ class RuntimeHealthChecker(private val context: Context) {
             id = "bootstrap",
             label = "Linux userland",
             status = if (installed) CheckStatus.PASS else CheckStatus.FAIL,
-            detail = if (installed) "Bootstrap present at ${env.prefixDir}" else "Not installed — run setup from Home",
+            detail = if (installed) "Bootstrap present at ${env.prefixDir}" else "Not installed — open Settings > Environment to set up the runtime",
         )
     }
 
@@ -70,10 +71,10 @@ class RuntimeHealthChecker(private val context: Context) {
         val present = env.hasTermuxExec
         return HealthCheckResult(
             id = "termux_exec",
-            label = "Process exec shim",
+            label = "Runtime execution support",
             status = if (present) CheckStatus.PASS else CheckStatus.FAIL,
-            detail = if (present) "libtermux-exec-ld-preload.so present — spawning inside the bootstrap will work on API 29+"
-                     else "Missing — spawning any bootstrap binary will fail with EACCES (see ARCHITECTURE.md §2a)",
+            detail = if (present) "Bundled PRoot and loader are present; see the PTY check for execution results"
+                     else "Bundled runtime support is missing for this architecture",
         )
     }
 
@@ -146,19 +147,6 @@ class RuntimeHealthChecker(private val context: Context) {
     }
 
     private suspend fun runCommand(command: List<String>): String {
-        val process = PtyProcess.spawn(
-            command = env.wrapForExec(command),
-            environment = env.buildEnvironment(),
-            workingDirectory = env.homeDir.absolutePath,
-            initialCols = 80,
-            initialRows = 24,
-        )
-        val output = StringBuilder()
-        val collectJob = CoroutineScope(Dispatchers.IO).launch {
-            process.outputFlow.collect { output.append(String(it, Charsets.UTF_8)) }
-        }
-        process.waitForExit()
-        collectJob.cancel()
-        return output.toString()
+        return runPtyCommand(env.wrapForExec(command), env.buildEnvironment(), env.homeDir.absolutePath).requireSuccess()
     }
 }

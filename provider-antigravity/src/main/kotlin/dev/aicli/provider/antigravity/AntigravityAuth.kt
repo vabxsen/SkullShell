@@ -6,6 +6,8 @@ import dev.aicli.provider.api.ProviderAuth
 import dev.aicli.runtime.bootstrap.TermuxEnvironment
 import dev.aicli.terminal.PtyProcess
 import java.io.File
+import dev.aicli.runtime.foreignlibc.ForeignLibcRuntime
+import dev.aicli.runtime.foreignlibc.LibcFlavor
 
 /**
  * Antigravity authenticates via the system secret-service keyring, falling back to a Google
@@ -21,15 +23,14 @@ class AntigravityAuth(private val context: Context, private val binaryPath: File
     override suspend fun currentState(): AuthState = AuthState.Unknown
 
     override suspend fun startLogin(): PtyProcess = PtyProcess.spawn(
-        command = env.wrapForExec(listOf(binaryPath.absolutePath)),
-        environment = AntigravityEnvironment.build(env),
+        command = ForeignLibcRuntime(context).wrapCommand(LibcFlavor.GLIBC, listOf(binaryPath.absolutePath), env.homeDir.absolutePath),
+        environment = env.buildEnvironment(),
         workingDirectory = env.homeDir.absolutePath,
         initialCols = 100,
         initialRows = 32,
     )
 
     override suspend fun logout() {
-        // No known local credential file to clear — logout must happen through Antigravity's own
-        // command (if it exposes one) or by revoking access from the Google account itself.
+        error("Use Antigravity's account controls inside the CLI to sign out")
     }
 }

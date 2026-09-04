@@ -17,6 +17,13 @@ class ProviderStateRepository(private val providers: List<AIProvider>) {
     val states: StateFlow<Map<String, ProviderState>> = _states.asStateFlow()
 
     suspend fun refreshAll() {
-        _states.value = providers.associate { it.id to it.detectState() }
+        _states.value = providers.associate { provider ->
+            val state = try {
+                val compatibility = provider.checkCompatibility()
+                if (!compatibility.compatible) ProviderState.Incompatible(compatibility.summary) else provider.detectState()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) { ProviderState.Error(e.message ?: "Provider check failed") }
+            provider.id to state
+        }
     }
 }

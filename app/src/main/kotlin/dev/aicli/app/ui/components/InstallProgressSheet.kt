@@ -43,9 +43,9 @@ fun InstallProgressSheet(
         onDismiss = { if (progress.done) onDismiss() },
         dismissOnScrimTap = progress.done,
     ) {
-        Label(
+        Text(
             if (progress.done) progress.displayName else "Installing " + progress.displayName,
-            color = colors.inkMuted,
+            style = SkullTheme.type.title, color = colors.ink,
         )
         Rule(Modifier.padding(top = Space.x3, bottom = Space.x5))
 
@@ -65,7 +65,7 @@ fun InstallProgressSheet(
                 }
             }
             is InstallEvent.Completed -> Row(verticalAlignment = Alignment.CenterVertically) {
-                Glyph(Glyphs.CheckCircle, null, size = Metrics.glyphMd, tint = colors.ink)
+                Glyph(Glyphs.CheckCircle, null, size = Metrics.glyphMd, tint = colors.success)
                 Text(
                     progress.displayName + " is ready",
                     style = SkullTheme.type.body,
@@ -75,7 +75,7 @@ fun InstallProgressSheet(
             }
             is InstallEvent.Failed -> Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Glyph(Glyphs.ErrorCircle, null, size = Metrics.glyphMd, tint = colors.ink)
+                    Glyph(Glyphs.ErrorCircle, null, size = Metrics.glyphMd, tint = colors.error)
                     Text(
                         "Failed at '" + event.step + "'",
                         style = SkullTheme.type.body,
