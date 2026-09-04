@@ -3,7 +3,6 @@ package dev.aicli.terminal
 import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -147,7 +145,7 @@ fun TerminalView(
         else buffer.snapshotRow(absoluteIndex - sbSize)
     }
 
-    Box(modifier = modifier.border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+    Box(modifier = modifier) {
     Canvas(
         modifier = Modifier
             .fillMaxSize()
