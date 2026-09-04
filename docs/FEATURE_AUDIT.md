@@ -131,8 +131,10 @@ and the disposable selected folder described in its source.
 - External-folder export is explicit and detects conflicts before writing. It is
   not a continuous synchronizer or a transactional multi-file backup system. A
   provider/storage failure partway through writing must be resolved/retried.
-- A real newer, correctly signed release APK was not installed over this debug
-  build. The current release lookup and invalid-package checks were tested.
+- Release follow-up: the signed v1.0.3 APK (version code 4) was built, its signing
+  certificate matched the published v1.0.2 APK, and Android successfully installed
+  it over v1.0.2 on the emulator. The release Home and Settings screens launched.
+  The complete in-app download-to-installer flow still needs an end-to-end check.
 - CLI credential files remain managed by the CLIs in private app storage. SafePath
   protects app file operations; arbitrary shell commands can access other files in
   the same Android app sandbox.
