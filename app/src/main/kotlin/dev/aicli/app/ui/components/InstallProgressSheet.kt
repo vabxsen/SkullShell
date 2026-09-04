@@ -1,36 +1,36 @@
 package dev.aicli.app.ui.components
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import dev.aicli.app.ui.common.InstallProgressUi
-import dev.aicli.app.ui.theme.Dimens
+import dev.aicli.app.ui.design.GhostButton
+import dev.aicli.app.ui.design.Glyph
+import dev.aicli.app.ui.design.Glyphs
+import dev.aicli.app.ui.design.Label
+import dev.aicli.app.ui.design.LinearProgress
+import dev.aicli.app.ui.design.Metrics
+import dev.aicli.app.ui.design.PrimaryButton
+import dev.aicli.app.ui.design.Rule
+import dev.aicli.app.ui.design.Sheet
+import dev.aicli.app.ui.design.SkullTheme
+import dev.aicli.app.ui.design.Space
+import dev.aicli.app.ui.design.Text
 import dev.aicli.provider.api.InstallEvent
 
 /**
- * Unified install/update/repair/uninstall progress presentation — shared by every Providers- and
- * Settings-screen action that triggers one, so there is one install experience, not several.
- * [event]'s shape today is [InstallEvent] directly; other runtime progress types (e.g.
- * [dev.aicli.runtime.bootstrap.BootstrapState]) fold into the same visual shape via a UI-layer
- * mapper (see `ui/install/InstallEventMapper.kt`) without changing this
- * component's public contract.
+ * The single install/update/repair/uninstall progress surface - every Providers- and Settings-
+ * screen action that starts one shows this, so there is one install experience rather than
+ * several.
+ *
+ * The sheet cannot be dismissed by tapping away while work is in flight ([InstallProgressUi.done]
+ * is false): a half-finished userland install is not something to lose track of behind a screen.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InstallProgressSheet(
     progress: InstallProgressUi,
@@ -38,58 +38,71 @@ fun InstallProgressSheet(
     onOpenProvider: (() -> Unit)? = null,
 ) {
     val event = progress.latestEvent
-    ModalBottomSheet(onDismissRequest = { if (progress.done) onDismiss() }) {
-        Column(Modifier.padding(horizontal = Dimens.space16).padding(bottom = Dimens.space24)) {
-            Text(
-                if (progress.done) progress.displayName else "Installing ${progress.displayName}",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Column(Modifier.padding(top = Dimens.space12)) {
-                when (event) {
-                    is InstallEvent.Progress -> {
-                        Text(event.step, style = MaterialTheme.typography.bodyMedium)
-                        val fraction = event.fraction
-                        if (fraction != null) {
-                            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().padding(top = Dimens.space8))
-                        } else {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = Dimens.space8))
-                        }
-                        event.logLine?.let {
-                            ExpandableDetails("Technical details", it, modifier = Modifier.padding(top = Dimens.space12).fillMaxWidth())
-                        }
-                    }
-                    is InstallEvent.Completed -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Text(
-                                "${progress.displayName} is ready",
-                                style = MaterialTheme.typography.bodyMedium,
-                                modifier = Modifier.padding(start = Dimens.space8),
-                            )
-                        }
-                    }
-                    is InstallEvent.Failed -> {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                            Text(
-                                "Failed at '${event.step}'",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(start = Dimens.space8),
-                            )
-                        }
-                        ExpandableDetails("Technical details", event.reason, modifier = Modifier.padding(top = Dimens.space12).fillMaxWidth())
-                    }
-                    null -> LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    val colors = SkullTheme.colors
+    Sheet(
+        onDismiss = { if (progress.done) onDismiss() },
+        dismissOnScrimTap = progress.done,
+    ) {
+        Label(
+            if (progress.done) progress.displayName else "Installing " + progress.displayName,
+            color = colors.inkMuted,
+        )
+        Rule(Modifier.padding(top = Space.x3, bottom = Space.x5))
+
+        when (event) {
+            is InstallEvent.Progress -> {
+                Text(event.step, style = SkullTheme.type.body, color = colors.ink)
+                LinearProgress(
+                    fraction = event.fraction,
+                    modifier = Modifier.padding(top = Space.x4),
+                )
+                event.logLine?.let {
+                    ExpandableDetails(
+                        label = "Technical details",
+                        content = it,
+                        modifier = Modifier.padding(top = Space.x4).fillMaxWidth(),
+                    )
                 }
             }
-            if (progress.done) {
-                Row(modifier = Modifier.padding(top = Dimens.space16)) {
-                    if (event is InstallEvent.Completed && onOpenProvider != null) {
-                        Button(onClick = { onOpenProvider(); onDismiss() }) { Text("Open ${progress.displayName}") }
-                    } else {
-                        TextButton(onClick = onDismiss) { Text("Close") }
-                    }
+            is InstallEvent.Completed -> Row(verticalAlignment = Alignment.CenterVertically) {
+                Glyph(Glyphs.CheckCircle, null, size = Metrics.glyphMd, tint = colors.ink)
+                Text(
+                    progress.displayName + " is ready",
+                    style = SkullTheme.type.body,
+                    color = colors.ink,
+                    modifier = Modifier.padding(start = Space.x3),
+                )
+            }
+            is InstallEvent.Failed -> Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Glyph(Glyphs.ErrorCircle, null, size = Metrics.glyphMd, tint = colors.ink)
+                    Text(
+                        "Failed at '" + event.step + "'",
+                        style = SkullTheme.type.body,
+                        color = colors.ink,
+                        modifier = Modifier.padding(start = Space.x3),
+                    )
+                }
+                ExpandableDetails(
+                    label = "Technical details",
+                    content = event.reason,
+                    initiallyExpanded = true,
+                    modifier = Modifier.padding(top = Space.x4).fillMaxWidth(),
+                )
+            }
+            null -> LinearProgress()
+        }
+
+        if (progress.done) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = Space.x6),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                if (event is InstallEvent.Completed && onOpenProvider != null) {
+                    GhostButton("Close", onDismiss)
+                    PrimaryButton("Open " + progress.displayName, { onOpenProvider(); onDismiss() })
+                } else {
+                    PrimaryButton("Close", onDismiss)
                 }
             }
         }

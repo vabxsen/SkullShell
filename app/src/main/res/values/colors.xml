@@ -1,7 +1,7 @@
 <resources>
-    <!-- Material 3 Baseline dark background/primary — matches Theme.kt's darkColorScheme(),
-         so the pre-Compose splash frame doesn't visually clash with the app's own theme. -->
-    <color name="window_background_dark">#1C1B1F</color>
-    <color name="launcher_background">#1C1B1F</color>
-    <color name="launcher_foreground_accent">#D0BCFF</color>
+    <!-- Pure black, matching SkullColors.bg in the dark scheme (ui/design/Tokens.kt), so the
+         pre-Compose window frame is indistinguishable from the app's first drawn frame. -->
+    <color name="window_background_dark">#000000</color>
+    <color name="launcher_background">#000000</color>
+    <color name="launcher_foreground_accent">#FFFFFF</color>
 </resources>

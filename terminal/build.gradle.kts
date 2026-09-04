@@ -51,9 +51,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.compose.ui)
     implementation(platform(libs.compose.bom))
-    implementation(libs.compose.material3)
     implementation(libs.compose.ui.graphics)
-    implementation(libs.compose.material.icons.extended)
+    implementation(libs.compose.foundation)
 
     testImplementation(libs.junit)
     testImplementation(libs.truth)

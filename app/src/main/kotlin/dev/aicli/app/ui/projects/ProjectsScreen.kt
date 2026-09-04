@@ -2,56 +2,56 @@ package dev.aicli.app.ui.projects
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.WifiOff
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.aicli.app.ui.common.UiState
 import dev.aicli.app.ui.components.EmptyState
 import dev.aicli.app.ui.components.ErrorState
-import dev.aicli.app.ui.components.LoadingState
-import dev.aicli.app.ui.components.ProjectItem
-import dev.aicli.app.ui.components.SectionHeader
-import dev.aicli.app.ui.theme.Dimens
-import dev.aicli.core.filesystem.Project
+import dev.aicli.app.ui.components.ProjectRow
+import dev.aicli.app.ui.design.GhostButton
+import dev.aicli.app.ui.design.Glyphs
+import dev.aicli.app.ui.design.IconAction
+import dev.aicli.app.ui.design.InputField
+import dev.aicli.app.ui.design.LoadingBody
+import dev.aicli.app.ui.design.Metrics
+import dev.aicli.app.ui.design.Modal
+import dev.aicli.app.ui.design.PageTitle
+import dev.aicli.app.ui.design.PrimaryButton
+import dev.aicli.app.ui.design.Rule
+import dev.aicli.app.ui.design.Screen
+import dev.aicli.app.ui.design.SectionHeader
+import dev.aicli.app.ui.design.SkullTheme
+import dev.aicli.app.ui.design.Space
+import dev.aicli.app.ui.design.Text
+import dev.aicli.app.ui.design.TopBar
 
-private val WIDE_BREAKPOINT = 600.dp
+/**
+ * Wide screens get a centred measure rather than a grid of tiles. Hairline-separated rows are
+ * already an efficient way to show a list; stretching them to a 10-inch width would just make
+ * them hard to track across, and turning them into cards to fill the space would contradict the
+ * row/panel rule the rest of the app follows.
+ */
+private val MAX_MEASURE = 720.dp
 
 @Composable
 fun ProjectsScreen(
     viewModel: ProjectsViewModel,
-    onOpenProject: (Project) -> Unit,
+    onOpenProject: (dev.aicli.core.filesystem.Project) -> Unit,
     onBack: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -63,37 +63,40 @@ fun ProjectsScreen(
         }
     }
 
-    Scaffold(
-        topBar = { TopAppBar(title = { Text("Projects") }) },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { showCreateDialog = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text("New") })
+    Screen(
+        topBar = {
+            TopBar(
+                crumb = "SkullShell / Projects",
+                actions = {
+                    IconAction(
+                        icon = Glyphs.Plus,
+                        contentDescription = "New project",
+                        onClick = { showCreateDialog = true },
+                        tint = SkullTheme.colors.ink,
+                    )
+                },
+            )
         },
-    ) { padding ->
-        when (val s = state) {
-            is UiState.Loading -> LoadingState(Modifier.fillMaxSize().padding(padding))
-            is UiState.Offline -> ErrorState(
-                title = "You're offline",
-                body = "Projects stored on this device are still available; opening external folders needs storage access, not network.",
-                icon = Icons.Filled.WifiOff,
-                modifier = Modifier.fillMaxSize().padding(padding),
-            )
-            is UiState.Error -> ErrorState(
-                title = "Couldn't load projects",
-                body = s.message,
-                modifier = Modifier.fillMaxSize().padding(padding),
-            )
-            is UiState.Success -> {
-                if (s.data.isEmpty()) {
+    ) {
+        Box(Modifier.widthIn(max = MAX_MEASURE).fillMaxSize().align(Alignment.TopCenter)) {
+            when (val s = state) {
+                is UiState.Loading -> LoadingBody(Modifier.fillMaxSize(), label = "Loading projects")
+                is UiState.Offline -> ErrorState(
+                    title = "Offline",
+                    body = "Projects on this device are still available. Opening an external folder needs storage access, not a network.",
+                    glyph = Glyphs.NoSignal,
+                )
+                is UiState.Error -> ErrorState(title = "Could not load projects", body = s.message)
+                is UiState.Success -> if (s.data.isEmpty()) {
                     EmptyState(
-                        icon = Icons.Filled.Folder,
+                        glyph = Glyphs.Folder,
                         title = "No projects yet",
-                        body = "Create or import your first coding project.",
-                        actionLabel = "Create project",
+                        body = "Create a workspace inside the app, or open a folder that already exists on this device.",
+                        actionLabel = "New project",
                         onAction = { showCreateDialog = true },
-                        modifier = Modifier.fillMaxSize().padding(padding),
                     )
                 } else {
-                    ProjectsContent(s.data, padding, onOpenProject, onDelete = viewModel::removeProject)
+                    ProjectsList(s.data, onOpenProject, viewModel::removeProject)
                 }
             }
         }
@@ -109,79 +112,83 @@ fun ProjectsScreen(
 }
 
 /** [dev.aicli.core.db.ProjectDao.observeAll] orders by last-opened desc, so the first project
- *  in [projects] is always "current" — no separate query needed. */
+ *  in [projects] is always "current" - no separate query needed. */
 @Composable
-private fun ProjectsContent(
-    projects: List<Project>,
-    padding: PaddingValues,
-    onOpenProject: (Project) -> Unit,
+private fun ProjectsList(
+    projects: List<dev.aicli.core.filesystem.Project>,
+    onOpenProject: (dev.aicli.core.filesystem.Project) -> Unit,
     onDelete: (String) -> Unit,
 ) {
     val current = projects.first()
     val recent = projects.drop(1)
 
-    BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
-        if (maxWidth < WIDE_BREAKPOINT) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(Dimens.space16),
-                verticalArrangement = Arrangement.spacedBy(Dimens.space12),
-            ) {
-                item { SectionHeader("Current") }
-                item { ProjectItem(current, onClick = { onOpenProject(current) }, onDelete = { onDelete(current.id) }) }
-                if (recent.isNotEmpty()) {
-                    item { SectionHeader("Recent", modifier = Modifier.padding(top = Dimens.space8)) }
-                    items(recent, key = { it.id }) { project ->
-                        ProjectItem(project, onClick = { onOpenProject(project) }, onDelete = { onDelete(project.id) })
-                    }
-                }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = Space.x10),
+    ) {
+        item {
+            PageTitle(
+                title = "Projects",
+                subtitle = "Workspaces the terminal can open into.",
+                modifier = Modifier.padding(horizontal = Metrics.gutter, vertical = Space.x6),
+            )
+        }
+        item {
+            SectionHeader("Current", Modifier.padding(horizontal = Metrics.gutter, vertical = Space.x4))
+        }
+        item {
+            ProjectRow(current, onClick = { onOpenProject(current) }, onDelete = { onDelete(current.id) })
+            Rule()
+        }
+        if (recent.isNotEmpty()) {
+            item {
+                SectionHeader("Recent", Modifier.padding(horizontal = Metrics.gutter, vertical = Space.x4))
             }
-        } else {
-            Column(Modifier.fillMaxSize().padding(Dimens.space16), verticalArrangement = Arrangement.spacedBy(Dimens.space12)) {
-                SectionHeader("Current")
-                ProjectItem(current, onClick = { onOpenProject(current) }, onDelete = { onDelete(current.id) })
-                if (recent.isNotEmpty()) {
-                    SectionHeader("Recent", modifier = Modifier.padding(top = Dimens.space8))
-                    LazyVerticalGrid(
-                        columns = GridCells.Adaptive(minSize = 260.dp),
-                        modifier = Modifier.fillMaxWidth().fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(Dimens.space12),
-                        verticalArrangement = Arrangement.spacedBy(Dimens.space12),
-                    ) {
-                        items(recent, key = { it.id }) { project ->
-                            ProjectItem(project, onClick = { onOpenProject(project) }, onDelete = { onDelete(project.id) })
-                        }
-                    }
-                }
+            items(recent, key = { it.id }) { project ->
+                ProjectRow(project, onClick = { onOpenProject(project) }, onDelete = { onDelete(project.id) })
+                Rule()
             }
         }
     }
 }
 
 @Composable
-private fun CreateProjectDialog(onDismiss: () -> Unit, onCreateAppWorkspace: (String) -> Unit, onOpenExternal: () -> Unit) {
+private fun CreateProjectDialog(
+    onDismiss: () -> Unit,
+    onCreateAppWorkspace: (String) -> Unit,
+    onOpenExternal: () -> Unit,
+) {
     var name by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("New project") },
-        text = {
-            Column {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name") }, modifier = Modifier.fillMaxWidth())
-                Text(
-                    "Or open an existing folder from your device instead of creating an app workspace.",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = Dimens.space12),
-                )
-            }
+    Modal(
+        title = "New project",
+        onDismiss = onDismiss,
+        actions = {
+            GhostButton("Cancel", onDismiss)
+            PrimaryButton(
+                label = "Create",
+                onClick = { if (name.isNotBlank()) onCreateAppWorkspace(name) },
+                enabled = name.isNotBlank(),
+            )
         },
-        confirmButton = {
-            Button(onClick = { if (name.isNotBlank()) onCreateAppWorkspace(name) }, enabled = name.isNotBlank()) { Text("Create workspace") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(onClick = onOpenExternal) { Text("Open folder…") }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-            }
-        },
-    )
+    ) {
+        InputField(
+            value = name,
+            onValueChange = { name = it },
+            label = "Workspace name",
+            placeholder = "my-project",
+        )
+        Text(
+            "Creates a workspace inside the app's own storage.",
+            style = SkullTheme.type.bodySm,
+            color = SkullTheme.colors.inkMuted,
+            modifier = Modifier.padding(top = Space.x3),
+        )
+        Rule(Modifier.padding(vertical = Space.x5))
+        GhostButton(
+            label = "Open an existing folder",
+            onClick = onOpenExternal,
+            glyph = Glyphs.FolderExternal,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }

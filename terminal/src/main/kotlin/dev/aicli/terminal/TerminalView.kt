@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -25,6 +24,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
@@ -39,6 +39,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +60,7 @@ fun TerminalView(
     buffer: TerminalBuffer,
     modifier: Modifier = Modifier,
     fontSize: TextUnit = 13.sp,
+    contentPadding: Dp = 0.dp,
     backgroundColor: Int = 0x00101014,
     defaultForeground: Int = 0xffe6e6e6.toInt(),
     focusRequester: FocusRequester = remember { FocusRequester() },
@@ -67,6 +69,7 @@ fun TerminalView(
 ) {
     val density = LocalDensity.current
     val clipboard = LocalClipboardManager.current
+    val padPx = with(density) { contentPadding.toPx() }
 
     val paint = remember(fontSize) {
         Paint().apply {
@@ -177,14 +180,14 @@ fun TerminalView(
                 detectDragGesturesAfterLongPress(
                     onDragStart = { offset ->
                         val topLine = currentTopLine(pinnedToBottom, totalLines(), lastRows, scrollFromBottom)
-                        val cell = cellFromOffset(offset, charWidth, charHeight, topLine, lastCols)
+                        val cell = cellFromOffset(offset, padPx, charWidth, charHeight, topLine, lastCols)
                         selectionStart = cell
                         selectionEnd = cell
                     },
                     onDrag = { change, _ ->
                         change.consume()
                         val topLine = currentTopLine(pinnedToBottom, totalLines(), lastRows, scrollFromBottom)
-                        selectionEnd = cellFromOffset(change.position, charWidth, charHeight, topLine, lastCols)
+                        selectionEnd = cellFromOffset(change.position, padPx, charWidth, charHeight, topLine, lastCols)
                     },
                     onDragEnd = {
                         val start = selectionStart
@@ -199,8 +202,8 @@ fun TerminalView(
                 )
             },
     ) {
-        val cols = max(1, (size.width / charWidth).toInt())
-        val visibleRows = max(1, (size.height / charHeight).toInt())
+        val cols = max(1, ((size.width - padPx * 2) / charWidth).toInt())
+        val visibleRows = max(1, ((size.height - padPx * 2) / charHeight).toInt())
         if (cols != lastCols || visibleRows != lastRows) {
             lastCols = cols
             lastRows = visibleRows
@@ -212,23 +215,27 @@ fun TerminalView(
         val topLine = currentTopLine(pinnedToBottom, totalLines(), lastRows, scrollFromBottom)
         val sel = normalizeSelection(selectionStart, selectionEnd)
 
-        for (viewRow in 0 until visibleRows) {
-            val absoluteLine = topLine + viewRow
-            if (absoluteLine < 0 || absoluteLine >= totalLines()) continue
-            val row = getLine(absoluteLine)
-            drawRow(row, viewRow, charWidth, charHeight, paint, defaultForeground, backgroundColor, absoluteLine, sel)
-        }
+        // Only the grid is inset by [contentPadding] — the background above stays full-bleed, so
+        // the gutter reads as breathing room around the text rather than as a border or a seam.
+        translate(padPx, padPx) {
+            for (viewRow in 0 until visibleRows) {
+                val absoluteLine = topLine + viewRow
+                if (absoluteLine < 0 || absoluteLine >= totalLines()) continue
+                val row = getLine(absoluteLine)
+                drawRow(row, viewRow, charWidth, charHeight, paint, defaultForeground, backgroundColor, absoluteLine, sel)
+            }
 
-        if (buffer.cursorVisible && blink) {
-            val cursorAbsoluteLine = (totalLines() - buffer.rows) + buffer.cursorRow
-            val cursorViewRow = cursorAbsoluteLine - topLine
-            if (cursorViewRow in 0 until visibleRows) {
-                drawRect(
-                    Color(defaultForeground or (0xFF shl 24)),
-                    topLeft = Offset(buffer.cursorCol * charWidth, cursorViewRow * charHeight),
-                    size = androidx.compose.ui.geometry.Size(charWidth, charHeight),
-                    alpha = 0.5f,
-                )
+            if (buffer.cursorVisible && blink) {
+                val cursorAbsoluteLine = (totalLines() - buffer.rows) + buffer.cursorRow
+                val cursorViewRow = cursorAbsoluteLine - topLine
+                if (cursorViewRow in 0 until visibleRows) {
+                    drawRect(
+                        Color(defaultForeground or (0xFF shl 24)),
+                        topLeft = Offset(buffer.cursorCol * charWidth, cursorViewRow * charHeight),
+                        size = androidx.compose.ui.geometry.Size(charWidth, charHeight),
+                        alpha = 0.5f,
+                    )
+                }
             }
         }
     }
@@ -318,9 +325,9 @@ private fun currentTopLine(pinnedToBottom: Boolean, totalLines: Int, viewportRow
     return (totalLines - viewportRows - offset).coerceAtLeast(0)
 }
 
-private fun cellFromOffset(offset: Offset, charWidth: Float, charHeight: Float, topLine: Int, cols: Int): Pair<Int, Int> {
-    val col = (offset.x / charWidth).toInt().coerceIn(0, max(0, cols - 1))
-    val viewRow = (offset.y / charHeight).toInt()
+private fun cellFromOffset(offset: Offset, pad: Float, charWidth: Float, charHeight: Float, topLine: Int, cols: Int): Pair<Int, Int> {
+    val col = ((offset.x - pad) / charWidth).toInt().coerceIn(0, max(0, cols - 1))
+    val viewRow = ((offset.y - pad) / charHeight).toInt()
     return (topLine + viewRow) to col
 }
 

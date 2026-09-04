@@ -3,7 +3,7 @@ package dev.aicli.app.ui.components
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.MaterialTheme
+import dev.aicli.app.ui.design.SkullTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -35,8 +35,8 @@ private const val GLYPH_ROWS = 7
 fun DotMatrixText(
     text: String,
     modifier: Modifier = Modifier,
-    litColor: Color = MaterialTheme.colorScheme.primary,
-    unlitColor: Color = litColor.copy(alpha = 0.12f),
+    litColor: Color = SkullTheme.colors.ink,
+    unlitColor: Color = SkullTheme.colors.inkFaint.copy(alpha = 0.28f),
 ) {
     val chars = text.uppercase().filter { it == ' ' || DOT_FONT.containsKey(it) }
     if (chars.isEmpty()) return
